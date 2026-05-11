@@ -32,8 +32,14 @@
   body {
     @apply bg-[#0a0a0c] text-slate-100 selection:bg-indigo-500/30;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
   }
 }
+
+/* Safe-area insets for notched / home-indicator phones */
+.pt-safe-top    { padding-top:    env(safe-area-inset-top,    0px); }
+.pb-safe-bottom { padding-bottom: env(safe-area-inset-bottom, 16px); }
 
 @layer components {
   .glass-card {
