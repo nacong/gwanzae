@@ -32,19 +32,18 @@ export type DispatchApplication = {
   totalQuantity: number;      // 총수량
   totalAmount: number;        // 총금액
   items: ApplicationItem[];
-  status: 'pending' | 'completed';
+  requiredPersonnel: number;  // DB 조회 결과 필요 인원
+  status: 'unoptimized' | 'optimized' | 'completed';
   createdAt: number;
 };
 
-// Legacy type kept for logistics recommendation compatibility
-export type DispatchTask = {
+// 출동 시간 그룹 (최적화 결과)
+export type DispatchTimeGroup = {
   id: string;
-  applicant: string;
-  itemNumber: string;
-  itemName: string;
-  location: string;
-  status: 'pending' | 'completed' | 'skipped';
-  createdAt: number;
+  scheduledDateTime: string;        // 예정 출동 일시
+  applications: DispatchApplication[];
+  isDispatched: boolean;            // 출동 버튼 눌렀는지
+  optimizedRoute: string[];         // 최적 동선 (건물명 목록)
 };
 
 export type StaffStatus = {

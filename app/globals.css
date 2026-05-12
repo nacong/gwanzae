@@ -30,7 +30,7 @@
 
 @layer base {
   body {
-    @apply bg-[#0a0a0c] text-slate-100 selection:bg-indigo-500/30;
+    @apply bg-[#eef0f8] text-slate-800 selection:bg-indigo-200;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     -webkit-tap-highlight-color: transparent;
     overscroll-behavior: none;
@@ -39,15 +39,15 @@
 
 /* Safe-area insets for notched / home-indicator phones */
 .pt-safe-top    { padding-top:    env(safe-area-inset-top,    0px); }
-.pb-safe-bottom { padding-bottom: env(safe-area-inset-bottom, 16px); }
+.pb-safe-bottom { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
 
 @layer components {
   .glass-card {
-    @apply bg-white/5 backdrop-blur-xl border border-white/10 shadow-2xl;
+    @apply bg-white;
   }
-  
+
   .glass-button {
-    @apply relative overflow-hidden bg-white/10 hover:bg-white/20 border border-white/10 
+    @apply relative overflow-hidden bg-slate-100 hover:bg-slate-200 border border-slate-200
            transition-all duration-300 active:scale-95 disabled:opacity-50;
   }
 

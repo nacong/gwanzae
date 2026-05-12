@@ -1,5 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { ApplicationItem, DispatchApplication, DispatchTask } from "./utils";
+import { DispatchApplication } from "./utils";
 
 const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY ?? "");
 
@@ -15,7 +15,9 @@ async function fileToBase64(file: File): Promise<string> {
   });
 }
 
-export async function scanApplication(imageFile: File): Promise<Omit<DispatchApplication, "id" | "status" | "createdAt">> {
+export async function scanApplication(
+  imageFile: File
+): Promise<Omit<DispatchApplication, "id" | "status" | "createdAt" | "requiredPersonnel">> {
   const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
 
   const base64 = await fileToBase64(imageFile);
