@@ -12,7 +12,6 @@ import {
   getCurrentStaffStatus, StaffStatus,
 } from "@/lib/utils";
 import { scanApplication } from "@/lib/gemini";
-import { lookupPersonnel, savePersonnel } from "@/lib/db";
 
 // ─── Mock 최적화 ────────────────────────────────────────────────────────────
 function mockOptimize(apps: DispatchApplication[]): DispatchTimeGroup[] {
@@ -21,7 +20,7 @@ function mockOptimize(apps: DispatchApplication[]): DispatchTimeGroup[] {
     year: "numeric", month: "long", day: "numeric",
   });
   const extractRoute = (group: DispatchApplication[]) =>
-    Array.from(new Set(group.flatMap(a => a.items.map(i => i.location.split(" ")[0]))));
+    Array.from(new Set(group.flatMap(a => a.물품목록.map(i => i.설치장소.split(" ")[0]))));
   const half = Math.ceil(apps.length / 2);
   const groups: DispatchTimeGroup[] = [{
     id: Math.random().toString(36).substr(2, 9),
@@ -54,8 +53,9 @@ export default function Home() {
   const [scanStep, setScanStep] = useState<ScanStep>("camera");
   const [scanError, setScanError] = useState<string | null>(null);
   const [scannedData, setScannedData] = useState<ScannedData | null>(null);
-  const [itemPersonnel, setItemPersonnel] = useState<Record<number, number | null>>({});
+  const [metaInput, setMetaInput] = useState({ 신청번호: "", 신청부서: "", 신청일자: "" });
   const [itemPersonnelInput, setItemPersonnelInput] = useState<Record<number, string>>({});
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -68,9 +68,20 @@ export default function Home() {
   useEffect(() => {
     try {
       const u = localStorage.getItem("gwanzae-unoptimized");
-      if (u) setUnoptimizedApps(JSON.parse(u));
+      if (u) {
+        const parsed = JSON.parse(u);
+        // 구 형식(items 필드) 데이터 제거
+        const valid = parsed.filter((a: DispatchApplication) => Array.isArray(a.물품목록));
+        setUnoptimizedApps(valid);
+      }
       const g = localStorage.getItem("gwanzae-timegroups");
-      if (g) setTimeGroups(JSON.parse(g));
+      if (g) {
+        const parsed = JSON.parse(g);
+        const valid = parsed.filter((g: { applications: DispatchApplication[] }) =>
+          g.applications.every((a: DispatchApplication) => Array.isArray(a.물품목록))
+        );
+        setTimeGroups(valid);
+      }
     } catch { /* ignore */ }
   }, []);
 
@@ -85,47 +96,51 @@ export default function Home() {
 
   const resetScan = () => {
     setScanStep("camera"); setScanError(null); setScannedData(null);
-    setItemPersonnel({}); setItemPersonnelInput({});
+    setMetaInput({ 신청번호: "", 신청부서: "", 신청일자: "" });
+    setItemPersonnelInput({});
+    setSelectedFiles([]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setScanError(null); setScanOpen(true); setScanStep("scanning");
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    setSelectedFiles(prev => [...prev, ...files]);
+    setScanOpen(true);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleStartScan = async () => {
+    if (selectedFiles.length === 0) return;
+    setScanError(null); setScanStep("scanning");
     try {
-      const data = await scanApplication(file);
+      const data = await scanApplication(selectedFiles);
       setScannedData(data);
-      const personnel: Record<number, number | null> = {};
-      for (const item of data.items) {
-        personnel[item.seq] = lookupPersonnel(item.itemName);
-      }
-      setItemPersonnel(personnel);
-      setItemPersonnelInput({});
+      setMetaInput({ 신청번호: data.신청번호, 신청부서: data.신청부서, 신청일자: data.신청일자 });
+      const inputs: Record<number, string> = {};
+      data.물품목록.forEach((item, i) => {
+        inputs[i] = item.필요인원수 > 0 ? String(item.필요인원수) : "";
+      });
+      setItemPersonnelInput(inputs);
       setScanStep("review");
-    } catch {
-      setScanError("신청서 인식에 실패했습니다. 다시 시도해 주세요.");
+    } catch (err) {
+      console.error("[scanApplication error]", err);
+      setScanError(`인식 실패: ${err instanceof Error ? err.message : String(err)}`);
       setScanStep("camera");
     }
   };
 
   const handleSaveApplication = () => {
     if (!scannedData) return;
-    const personnelValues: number[] = [];
-    for (const item of scannedData.items) {
-      const found = itemPersonnel[item.seq];
-      if (found !== null && found !== undefined) {
-        personnelValues.push(found);
-      } else {
-        const parsed = parseInt(itemPersonnelInput[item.seq] ?? "", 10);
-        if (!parsed || parsed < 1) return;
-        savePersonnel(item.itemName, parsed);
-        personnelValues.push(parsed);
-      }
-    }
-    const requiredPersonnel = Math.max(...personnelValues);
+    const updatedItems = scannedData.물품목록.map((item, i) => ({
+      ...item,
+      필요인원수: parseInt(itemPersonnelInput[i] ?? "", 10) || item.필요인원수,
+    }));
+    const requiredPersonnel = Math.max(...updatedItems.map(it => it.필요인원수), 0);
     saveUnoptimized([...unoptimizedApps, {
       ...scannedData,
+      ...metaInput,
+      물품목록: updatedItems,
       id: Math.random().toString(36).substr(2, 9),
       requiredPersonnel,
       status: "unoptimized",
@@ -220,8 +235,8 @@ export default function Home() {
                         <FileText className="w-4 h-4 text-amber-500" />
                       </div>
                       <div>
-                        <div className="font-bold text-slate-900 text-sm">{app.applicationNumber}</div>
-                        <div className="text-xs text-slate-400 mt-0.5">{app.department} · {app.applicant}</div>
+                        <div className="font-bold text-slate-900 text-sm">{app.신청번호}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">{app.신청부서}</div>
                       </div>
                     </div>
                     <span className="text-[10px] font-bold bg-amber-50 text-amber-600 px-2.5 py-1 rounded-xl">
@@ -231,23 +246,23 @@ export default function Home() {
 
                   {/* 물품 목록 */}
                   <div className="bg-slate-50 rounded-xl p-3 space-y-2 mb-3">
-                    {app.items.map(item => (
-                      <div key={item.seq} className="flex items-center gap-2 text-xs">
+                    {app.물품목록.map((item, i) => (
+                      <div key={i} className="flex items-center gap-2 text-xs">
                         <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                        <span className="font-semibold text-slate-700">{item.itemName}</span>
+                        <span className="font-semibold text-slate-700">{item.품명}</span>
                         <ChevronRight className="w-3 h-3 text-slate-300 shrink-0" />
-                        <span className="text-slate-500 truncate">{item.location}</span>
+                        <span className="text-slate-500 truncate">{item.설치장소}</span>
                       </div>
                     ))}
                   </div>
 
                   {/* 하단 정보 */}
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
                     <div className="flex items-center gap-1.5 bg-indigo-50 px-3 py-1.5 rounded-xl">
                       <Users className="w-3.5 h-3.5 text-indigo-500" />
                       <span className="text-xs font-bold text-indigo-600">필요 {app.requiredPersonnel}명</span>
                     </div>
-                    <span className="text-xs text-slate-400">{app.totalQuantity}점 · {app.totalAmount.toLocaleString()}원</span>
+                    <span className="text-xs text-slate-400">{app.물품목록.length}개 물품</span>
                   </div>
                 </div>
               </motion.div>
@@ -333,8 +348,8 @@ export default function Home() {
                     <div key={app.id} className="p-4">
                       <div className="flex items-start justify-between mb-2.5">
                         <div className="min-w-0">
-                          <div className="font-bold text-sm text-slate-800">{app.applicationNumber}</div>
-                          <div className="text-xs text-slate-400 mt-0.5">{app.department} · {app.applicant}</div>
+                          <div className="font-bold text-sm text-slate-800">{app.신청번호}</div>
+                          <div className="text-xs text-slate-400 mt-0.5">{app.신청부서}</div>
                         </div>
                         <button
                           onClick={() => completeAppInGroup(group.id, app.id)}
@@ -346,12 +361,12 @@ export default function Home() {
                       </div>
 
                       <div className="space-y-1.5">
-                        {app.items.map(item => (
-                          <div key={item.seq} className="flex items-center gap-2 text-xs bg-slate-50 rounded-lg px-2.5 py-1.5">
+                        {app.물품목록.map((item, i) => (
+                          <div key={i} className="flex items-center gap-2 text-xs bg-slate-50 rounded-lg px-2.5 py-1.5">
                             <MapPin className="w-3 h-3 text-indigo-400 shrink-0" />
-                            <span className="font-semibold text-slate-700">{item.itemName}</span>
+                            <span className="font-semibold text-slate-700">{item.품명}</span>
                             <span className="text-slate-300">·</span>
-                            <span className="text-slate-500 truncate">{item.location}</span>
+                            <span className="text-slate-500 truncate">{item.설치장소}</span>
                           </div>
                         ))}
                       </div>
@@ -360,7 +375,7 @@ export default function Home() {
                         <div className="flex items-center gap-1 text-xs text-indigo-600 font-semibold bg-indigo-50 px-2 py-1 rounded-lg">
                           <Users className="w-3 h-3" />{app.requiredPersonnel}명
                         </div>
-                        <span className="text-xs text-slate-400">{app.totalQuantity}점 · {app.totalAmount.toLocaleString()}원</span>
+                        <span className="text-xs text-slate-400">{app.물품목록.length}개 물품</span>
                       </div>
                     </div>
                   ))}
@@ -388,12 +403,12 @@ export default function Home() {
       )}
 
       {/* ── 하단 고정 버튼 ── */}
-      <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileChange} />
+      <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileChange} />
 
       <div className="fixed bottom-0 left-0 right-0 px-4 pt-5 pb-safe-bottom bg-gradient-to-t from-[#eef0f8] via-[#eef0f8]/95 to-transparent z-40">
         <div className="flex gap-3">
           <button
-            onClick={() => { resetScan(); fileInputRef.current?.click(); }}
+            onClick={() => { resetScan(); setScanOpen(true); }}
             className="flex-1 flex items-center justify-center gap-2 bg-white rounded-2xl py-4 font-bold text-slate-700 text-sm active:bg-slate-50 transition-all"
           >
             <Camera className="w-4 h-4 text-indigo-500" />
@@ -454,7 +469,7 @@ export default function Home() {
 
               <div className="flex-1 overflow-y-auto overscroll-contain">
 
-                {/* Step 1: 카메라 */}
+                {/* Step 1: 파일 선택 */}
                 {scanStep === "camera" && (
                   <div className="p-5 space-y-4">
                     {scanError && (
@@ -463,26 +478,56 @@ export default function Home() {
                         {scanError}
                       </div>
                     )}
-                    <div className="aspect-[4/3] bg-slate-100 rounded-2xl relative flex flex-col items-center justify-center gap-3 overflow-hidden">
-                      <motion.div
-                        animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 2 }}
-                        className="w-16 h-16 border-2 border-indigo-400 rounded-2xl flex items-center justify-center"
-                      >
-                        <FileText className="w-8 h-8 text-indigo-400" />
-                      </motion.div>
-                      <p className="text-slate-400 text-sm">물품 불용/반납신청서</p>
-                      <div className="absolute top-4 left-4 w-6 h-6 border-t-2 border-l-2 border-indigo-400 rounded-tl-lg" />
-                      <div className="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-indigo-400 rounded-tr-lg" />
-                      <div className="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-indigo-400 rounded-bl-lg" />
-                      <div className="absolute bottom-4 right-4 w-6 h-6 border-b-2 border-r-2 border-indigo-400 rounded-br-lg" />
-                    </div>
+
+                    {/* 선택된 파일 목록 */}
+                    {selectedFiles.length > 0 ? (
+                      <div className="space-y-2">
+                        {selectedFiles.map((file, i) => (
+                          <div key={i} className="flex items-center gap-3 bg-slate-50 rounded-2xl px-4 py-3">
+                            <FileText className="w-4 h-4 text-indigo-400 shrink-0" />
+                            <span className="flex-1 text-sm text-slate-700 truncate">{file.name}</span>
+                            <button
+                              onClick={() => setSelectedFiles(prev => prev.filter((_, j) => j !== i))}
+                              className="p-1 rounded-full hover:bg-slate-200 transition-colors"
+                            >
+                              <X className="w-4 h-4 text-slate-400" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="aspect-[4/3] bg-slate-100 rounded-2xl relative flex flex-col items-center justify-center gap-3 overflow-hidden">
+                        <motion.div
+                          animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 2 }}
+                          className="w-16 h-16 border-2 border-indigo-400 rounded-2xl flex items-center justify-center"
+                        >
+                          <FileText className="w-8 h-8 text-indigo-400" />
+                        </motion.div>
+                        <p className="text-slate-400 text-sm">물품 불용/반납신청서</p>
+                        <div className="absolute top-4 left-4 w-6 h-6 border-t-2 border-l-2 border-indigo-400 rounded-tl-lg" />
+                        <div className="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-indigo-400 rounded-tr-lg" />
+                        <div className="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-indigo-400 rounded-bl-lg" />
+                        <div className="absolute bottom-4 right-4 w-6 h-6 border-b-2 border-r-2 border-indigo-400 rounded-br-lg" />
+                      </div>
+                    )}
+
                     <button
                       onClick={() => fileInputRef.current?.click()}
-                      className="w-full bg-indigo-600 py-4 rounded-2xl font-bold text-white flex items-center justify-center gap-2 active:bg-indigo-700 transition-all"
+                      className="w-full bg-white border-2 border-dashed border-indigo-300 py-3.5 rounded-2xl font-bold text-indigo-500 text-sm flex items-center justify-center gap-2 active:bg-indigo-50 transition-all"
                     >
-                      <Camera className="w-5 h-5" />
-                      사진 촬영 / 파일 선택
+                      <Camera className="w-4 h-4" />
+                      {selectedFiles.length > 0 ? "사진 추가" : "사진 촬영 / 파일 선택"}
                     </button>
+
+                    {selectedFiles.length > 0 && (
+                      <button
+                        onClick={handleStartScan}
+                        className="w-full bg-indigo-600 py-4 rounded-2xl font-bold text-white flex items-center justify-center gap-2 active:bg-indigo-700 transition-all"
+                      >
+                        <ScanLine className="w-5 h-5" />
+                        {selectedFiles.length}장 인식 시작
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -503,72 +548,69 @@ export default function Home() {
 
                 {/* Step 3: 결과 확인 */}
                 {scanStep === "review" && scannedData && (() => {
-                  const allFilled = scannedData.items.every(item => {
-                    const found = itemPersonnel[item.seq];
-                    if (found !== null && found !== undefined) return true;
-                    const v = parseInt(itemPersonnelInput[item.seq] ?? "", 10);
+                  const allFilled = scannedData.물품목록.every((_, i) => {
+                    const v = parseInt(itemPersonnelInput[i] ?? "", 10);
                     return v >= 1;
                   });
                   return (
                     <div className="p-5 space-y-4 pb-safe-bottom">
 
-                      {/* 신청 기본 정보 */}
-                      <div className="bg-slate-50 rounded-2xl p-4">
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
-                          {[
-                            { label: "신청번호", value: scannedData.applicationNumber },
-                            { label: "신청부서", value: scannedData.department },
-                            { label: "신청자",   value: scannedData.applicant },
-                            { label: "신청일",   value: scannedData.applicationDate },
-                          ].map(({ label, value }) => (
-                            <div key={label}>
-                              <div className="text-slate-400 mb-0.5">{label}</div>
-                              <div className="font-bold text-slate-800 truncate">{value || "—"}</div>
+                      {/* 신청 정보 + 물품 목록 통합 카드 */}
+                      <div className="bg-slate-50 rounded-2xl overflow-hidden">
+
+                        {/* 기본 정보 */}
+                        <div className="p-4 space-y-3">
+                          {([
+                            { label: "신청번호", key: "신청번호" },
+                            { label: "신청부서", key: "신청부서" },
+                            { label: "신청일",   key: "신청일자" },
+                          ] as const).map(({ label, key }) => (
+                            <div key={key} className="flex items-center gap-3">
+                              <span className="text-xs text-slate-400 w-14 shrink-0">{label}</span>
+                              <input
+                                type="text"
+                                value={metaInput[key]}
+                                onChange={e => setMetaInput(prev => ({ ...prev, [key]: e.target.value }))}
+                                className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                              />
                             </div>
                           ))}
                         </div>
-                      </div>
 
-                      {/* 물품 목록 + 인원 (우측 인라인) */}
-                      <div className="rounded-2xl overflow-hidden">
-                        <div className="bg-indigo-600 px-4 py-3 flex items-center gap-2">
-                          <Users className="w-4 h-4 text-white" />
-                          <span className="font-bold text-white text-sm">물품 및 필요 인원</span>
-                        </div>
-                        <div className="bg-slate-50 p-3 space-y-2">
-                          {scannedData.items.map(item => {
-                            const found = itemPersonnel[item.seq];
-                            const inDB = found !== null && found !== undefined;
-                            return (
-                              <div key={item.seq} className="flex items-center gap-2 bg-white rounded-xl px-3 py-2.5">
-                                <MapPin className="w-3 h-3 text-indigo-400 shrink-0" />
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-xs font-bold text-slate-800 truncate">{item.itemName}</p>
-                                  <p className="text-[11px] text-slate-400 truncate">{item.location}</p>
-                                </div>
-                                {inDB ? (
-                                  <div className="shrink-0 flex items-baseline gap-0.5 bg-indigo-50 px-2.5 py-1 rounded-xl">
-                                    <span className="text-base font-black text-indigo-600">{found}</span>
-                                    <span className="text-xs font-bold text-indigo-400">명</span>
-                                  </div>
-                                ) : (
-                                  <div className="shrink-0 flex items-center gap-1">
-                                    <input
-                                      type="number" min="1" max="99"
-                                      value={itemPersonnelInput[item.seq] ?? ""}
-                                      onChange={e => setItemPersonnelInput(prev => ({ ...prev, [item.seq]: e.target.value }))}
-                                      placeholder="0"
-                                      className="w-14 text-center bg-amber-50 border border-amber-200 rounded-xl px-2 py-1.5 text-sm font-black text-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                                    />
-                                    <span className="text-xs font-bold text-slate-400">명</span>
-                                  </div>
-                                )}
+                        {/* 구분선 */}
+                        <div className="mx-4 border-t border-slate-200" />
+
+                        {/* 물품 목록 */}
+                        <div className="p-4 space-y-2">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-semibold text-slate-500">물품 목록</span>
+                            <span className="text-xs text-slate-400">{scannedData.물품목록.length}개</span>
+                          </div>
+                          {scannedData.물품목록.map((item, i) => (
+                            <div key={i} className="bg-white rounded-xl px-3 py-2.5 flex items-center gap-2">
+                              <MapPin className="w-3 h-3 text-indigo-400 shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-bold text-slate-800">
+                                  {item.품명}
+                                  <span className="ml-1.5 font-normal text-slate-400">×{item.수량}</span>
+                                </p>
+                                <p className="text-[11px] text-slate-400 truncate">{item.설치장소}</p>
                               </div>
-                            );
-                          })}
-                          {scannedData.items.some(item => itemPersonnel[item.seq] === null || itemPersonnel[item.seq] === undefined) && (
-                            <p className="text-[11px] text-amber-500 px-1 pt-1">
-                              ⚠ 인원 수를 직접 입력해 주세요. 저장 시 DB에 등록됩니다.
+                              <div className="shrink-0 flex items-center gap-1">
+                                <input
+                                  type="number" min="1" max="99"
+                                  value={itemPersonnelInput[i] ?? ""}
+                                  onChange={e => setItemPersonnelInput(prev => ({ ...prev, [i]: e.target.value }))}
+                                  placeholder="0"
+                                  className="w-12 text-center bg-indigo-50 border border-indigo-200 rounded-xl px-1 py-1.5 text-sm font-black text-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                                />
+                                <span className="text-xs text-slate-400">명</span>
+                              </div>
+                            </div>
+                          ))}
+                          {!allFilled && (
+                            <p className="text-[11px] text-amber-500 pt-1">
+                              ⚠ 필요 인원 수를 입력해 주세요.
                             </p>
                           )}
                         </div>
@@ -587,9 +629,7 @@ export default function Home() {
                           disabled={!allFilled}
                           className={cn(
                             "flex-[2] py-4 rounded-2xl font-bold text-sm transition-all",
-                            allFilled
-                              ? "bg-indigo-600 text-white active:bg-indigo-700"
-                              : "bg-slate-200 text-slate-400"
+                            allFilled ? "bg-indigo-600 text-white active:bg-indigo-700" : "bg-slate-200 text-slate-400"
                           )}
                         >
                           저장하기

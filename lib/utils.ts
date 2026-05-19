@@ -5,34 +5,20 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-// One row in the 물품 불용/반납신청서
-export type ApplicationItem = {
-  seq: number;
-  category: string;       // 구분 (불용/반납)
-  itemName: string;       // 품명
-  assetNumber: string;    // 자산번호
-  spec: string;           // 규격/모델
-  quantity: number;       // 수량
-  price: number;          // 금액
-  purchaseDate: string;   // 구입일
-  usefulLife: number;     // 내용연수
-  usedYears: number;      // 사용연수
-  location: string;       // 설치장소
-  reason: string;         // 불용신청사유
+export type 물품Item = {
+  품명: string;
+  설치장소: string;
+  수량: number;
+  필요인원수: number;
 };
 
-// One scanned 신청서 = one DispatchApplication
 export type DispatchApplication = {
   id: string;
-  applicationNumber: string;  // 신청번호
-  department: string;         // 신청부서
-  applicant: string;          // 신청자
-  contact: string;            // 연락처
-  applicationDate: string;    // 신청일
-  totalQuantity: number;      // 총수량
-  totalAmount: number;        // 총금액
-  items: ApplicationItem[];
-  requiredPersonnel: number;  // DB 조회 결과 필요 인원
+  신청번호: string;
+  신청일자: string;
+  신청부서: string;
+  물품목록: 물품Item[];
+  requiredPersonnel: number;
   status: 'unoptimized' | 'optimized' | 'completed';
   createdAt: number;
 };
@@ -98,5 +84,8 @@ export function getCurrentStaffStatus(): StaffStatus {
 }
 
 export const BUILDINGS = [
-    "본관", "공학관", "경상관", "인문관", "자연과학관", "학생회관", "미래관"
+  "공학관", "공학실험동", "국제경영대학관", "국제학관", "글로벌관",
+  "도예관", "멀티미디어관", "생명과학대학관", "선승관",
+  "실험연구동A", "실험연구동B", "예디대", "외국어대학관", "우정원",
+  "원예생명공학온실", "전정대", "중앙도서관", "천문대", "체육대학관", "학생회관",
 ];
