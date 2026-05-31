@@ -3,40 +3,32 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Camera, Users, Clock, CheckCircle2, X, Loader2, CalendarDays,
+  Camera, Users, Clock, CheckCircle2, X, Loader2,
   FileText, ScanLine, Truck, MapPin, AlertCircle, Navigation,
-  Timer, ChevronRight, Package,
+  Timer, ChevronRight, Package, ArrowRight, RefreshCw,
 } from "lucide-react";
 import {
   cn, DispatchApplication, DispatchTimeGroup,
   getCurrentStaffStatus, StaffStatus,
 } from "@/lib/utils";
 import { scanApplication } from "@/lib/gemini";
+import { fetchWorkers, optimizeRoute, updateProduct } from "@/lib/db";
 
-// ─── Mock 최적화 ────────────────────────────────────────────────────────────
-function mockOptimize(apps: DispatchApplication[]): DispatchTimeGroup[] {
-  if (apps.length === 0) return [];
-  const dateStr = new Date().toLocaleDateString("ko-KR", {
-    year: "numeric", month: "long", day: "numeric",
-  });
-  const extractRoute = (group: DispatchApplication[]) =>
-    Array.from(new Set(group.flatMap(a => a.물품목록.map(i => i.설치장소.split(" ")[0]))));
-  const half = Math.ceil(apps.length / 2);
-  const groups: DispatchTimeGroup[] = [{
-    id: Math.random().toString(36).substr(2, 9),
-    scheduledDateTime: `${dateStr} 오전 10:00`,
-    applications: apps.slice(0, half),
-    isDispatched: false,
-    optimizedRoute: extractRoute(apps.slice(0, half)),
-  }];
-  if (apps.length > 1) groups.push({
-    id: Math.random().toString(36).substr(2, 9),
-    scheduledDateTime: `${dateStr} 오후 2:00`,
-    applications: apps.slice(half),
-    isDispatched: false,
-    optimizedRoute: extractRoute(apps.slice(half)),
-  });
-  return groups;
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+
+/** 다양한 날짜 포맷을 "YYYY-MM-DD"로 통일 */
+function normalizeDate(dateStr: string): string {
+  if (!dateStr) return "날짜 미정";
+  const cleaned = dateStr
+    .replace(/년\s*/g, "-")
+    .replace(/월\s*/g, "-")
+    .replace(/일/g, "")
+    .replace(/\./g, "-")
+    .replace(/\s+/g, "")
+    .trim();
+  const d = new Date(cleaned);
+  if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
+  return dateStr;
 }
 
 type ScanStep = "camera" | "scanning" | "review";
@@ -55,8 +47,17 @@ export default function Home() {
   const [scannedData, setScannedData] = useState<ScannedData | null>(null);
   const [metaInput, setMetaInput] = useState({ 신청번호: "", 신청부서: "", 신청일자: "" });
   const [itemPersonnelInput, setItemPersonnelInput] = useState<Record<number, string>>({});
+  const [itemNameInput, setItemNameInput] = useState<Record<number, string>>({});
+  const [itemQuantityInput, setItemQuantityInput] = useState<Record<number, string>>({});
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [serverPersonnel, setServerPersonnel] = useState<Record<string, number>>({});
+
+  // 출동 팝업
+  const [dispatchPopup, setDispatchPopup] = useState<DispatchTimeGroup | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeData, setRouteData] = useState<unknown>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -98,6 +99,9 @@ export default function Home() {
     setScanStep("camera"); setScanError(null); setScannedData(null);
     setMetaInput({ 신청번호: "", 신청부서: "", 신청일자: "" });
     setItemPersonnelInput({});
+    setItemNameInput({});
+    setItemQuantityInput({});
+    setServerPersonnel({});
     setSelectedFiles([]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -114,14 +118,39 @@ export default function Home() {
     if (selectedFiles.length === 0) return;
     setScanError(null); setScanStep("scanning");
     try {
+      // Gemini 스캔 실행
       const data = await scanApplication(selectedFiles);
       setScannedData(data);
       setMetaInput({ 신청번호: data.신청번호, 신청부서: data.신청부서, 신청일자: data.신청일자 });
+
+      // 품명별로 GET /products/workers 병렬 호출 → 저장된 필요인원수 우선 사용
+      const workerResults = await Promise.all(
+        data.물품목록.map(item => fetchWorkers(item.품명).catch(() => null))
+      );
+
       const inputs: Record<number, string> = {};
+      const nameInputs: Record<number, string> = {};
+      const serverMap: Record<string, number> = {};
       data.물품목록.forEach((item, i) => {
-        inputs[i] = item.필요인원수 > 0 ? String(item.필요인원수) : "";
+        const w = workerResults[i];
+        const stored =
+          typeof w === "number"
+            ? w
+            : typeof (w as Record<string, unknown>)?.필요인원수 === "number"
+              ? (w as Record<string, unknown>).필요인원수 as number
+              : null;
+        if (stored != null && stored > 0) serverMap[item.품명] = stored;
+        inputs[i] = stored != null && stored > 0
+          ? String(stored)
+          : item.필요인원수 > 0 ? String(item.필요인원수) : "";
+        nameInputs[i] = item.품명;
       });
+      const quantityInputs: Record<number, string> = {};
+      data.물품목록.forEach((item, i) => { quantityInputs[i] = String(item.수량); });
+      setServerPersonnel(serverMap);
       setItemPersonnelInput(inputs);
+      setItemNameInput(nameInputs);
+      setItemQuantityInput(quantityInputs);
       setScanStep("review");
     } catch (err) {
       console.error("[scanApplication error]", err);
@@ -134,6 +163,8 @@ export default function Home() {
     if (!scannedData) return;
     const updatedItems = scannedData.물품목록.map((item, i) => ({
       ...item,
+      품명: (itemNameInput[i] ?? item.품명).trim() || item.품명,
+      수량: parseInt(itemQuantityInput[i] ?? "", 10) || item.수량,
       필요인원수: parseInt(itemPersonnelInput[i] ?? "", 10) || item.필요인원수,
     }));
     const requiredPersonnel = Math.max(...updatedItems.map(it => it.필요인원수), 0);
@@ -146,16 +177,147 @@ export default function Home() {
       status: "unoptimized",
       createdAt: Date.now(),
     }]);
+
+    // 서버 값과 달라진 항목만 PATCH /products/{originalName}
+    updatedItems.forEach((item, i) => {
+      const originalName = scannedData.물품목록[i].품명;
+      const serverVal = serverPersonnel[originalName];
+      const nameChanged = item.품명 !== originalName;
+      const personnelChanged = serverVal !== undefined && serverVal !== item.필요인원수;
+      if (nameChanged || personnelChanged) {
+        const patch: { 품명?: string; 필요인원수?: number } = {};
+        if (nameChanged) patch.품명 = item.품명;
+        if (personnelChanged) patch.필요인원수 = item.필요인원수;
+        updateProduct(originalName, patch).catch(err =>
+          console.error(`[updateProduct ${originalName}]`, err)
+        );
+      }
+    });
+
     setScanOpen(false); resetScan();
   };
 
   const handleOptimize = async () => {
     if (unoptimizedApps.length === 0 || isOptimizing) return;
     setIsOptimizing(true);
-    await new Promise(r => setTimeout(r, 1200));
-    saveTimeGroups([...timeGroups, ...mockOptimize(unoptimizedApps)]);
+
+    // 1) POST /optimize — 일정 저장
+    try {
+      const payload = unoptimizedApps.map(app => ({
+        신청번호: app.신청번호,
+        신청일자: app.신청일자,
+        신청부서: app.신청부서,
+        물품목록: app.물품목록.map(item => ({
+          품명: item.품명,
+          설치장소: item.설치장소,
+          수량: item.수량,
+          필요인원수: item.필요인원수,
+        })),
+      }));
+      await fetch(`${API_BASE}/optimize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      console.error("[optimize API error]", err);
+    }
+
+    // 2) 신청일자 기준 그룹핑
+    const dateMap = new Map<string, DispatchApplication[]>();
+    for (const app of unoptimizedApps) {
+      const key = normalizeDate(app.신청일자);
+      if (!dateMap.has(key)) dateMap.set(key, []);
+      dateMap.get(key)!.push(app);
+    }
+
+    // 3) 그룹별로 POST /optimize/route → 서버 최적 동선, 실패 시 클라이언트 폴백
+    const newGroups: DispatchTimeGroup[] = await Promise.all(
+      Array.from(dateMap.entries()).map(async ([date, apps]) => {
+        const fallbackRoute = Array.from(new Set(
+          apps.flatMap(a => a.물품목록.map(i => i.설치장소.split(" ")[0]))
+        ));
+        let optimizedRoute = fallbackRoute;
+        try {
+          const routeRes = await optimizeRoute({
+            투입인원수: staff.count > 0 ? staff.count : null,
+            신청서: apps.flatMap(a => a.물품목록.map(item => ({
+              품명: item.품명,
+              설치장소: item.설치장소,
+              수량: item.수량,
+              필요인원수: item.필요인원수,
+            }))),
+          });
+          // 서버가 string[] 형태의 동선을 반환하면 사용
+          if (Array.isArray(routeRes) && routeRes.every(r => typeof r === "string")) {
+            optimizedRoute = routeRes as string[];
+          }
+        } catch (err) {
+          console.error("[optimizeRoute API error]", err);
+        }
+        return {
+          id: Math.random().toString(36).substr(2, 9),
+          scheduledDateTime: date,
+          applications: apps,
+          isDispatched: false,
+          optimizedRoute,
+        };
+      })
+    );
+
+    saveTimeGroups([...timeGroups, ...newGroups]);
     saveUnoptimized([]);
     setIsOptimizing(false);
+  };
+
+  /** API 응답에서 경로 배열 추출 (형식 불명확하므로 유연하게 처리) */
+  function extractRoute(data: unknown): string[] | null {
+    if (Array.isArray(data) && data.every(r => typeof r === "string")) return data as string[];
+    if (data && typeof data === "object") {
+      const obj = data as Record<string, unknown>;
+      for (const key of ["route", "경로", "동선", "order", "locations", "건물순서"]) {
+        const val = obj[key];
+        if (Array.isArray(val) && val.every(r => typeof r === "string")) return val as string[];
+      }
+    }
+    return null;
+  }
+
+  /** 출동 버튼 클릭 → 팝업 열고 API 호출 */
+  const handleDispatchClick = async (group: DispatchTimeGroup) => {
+    setDispatchPopup(group);
+    setRouteLoading(true);
+    setRouteData(null);
+    setRouteError(null);
+    try {
+      const result = await optimizeRoute({
+        투입인원수: staff.count > 0 ? staff.count : null,
+        신청서: group.applications.flatMap(a => a.물품목록.map(item => ({
+          품명: item.품명,
+          설치장소: item.설치장소,
+          수량: item.수량,
+          필요인원수: item.필요인원수,
+        }))),
+      });
+      setRouteData(result);
+    } catch (err) {
+      setRouteError(String(err));
+    } finally {
+      setRouteLoading(false);
+    }
+  };
+
+  /** 출동 확인 → optimizedRoute를 서버 결과로 갱신 후 isDispatched = true */
+  const confirmDispatch = (groupId: string) => {
+    const serverRoute = extractRoute(routeData);
+    saveTimeGroups(timeGroups.map(g =>
+      g.id !== groupId ? g : {
+        ...g,
+        isDispatched: true,
+        optimizedRoute: serverRoute ?? g.optimizedRoute,
+      }
+    ));
+    setDispatchPopup(null);
   };
 
   const dispatchGroup = (id: string) =>
@@ -319,7 +481,7 @@ export default function Home() {
                     <div className="flex flex-col gap-2 shrink-0">
                       {!group.isDispatched ? (
                         <button
-                          onClick={() => dispatchGroup(group.id)}
+                          onClick={() => handleDispatchClick(group)}
                           className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-white text-indigo-600 active:bg-indigo-50 transition-colors"
                         >
                           <Truck className="w-3.5 h-3.5" />
@@ -550,7 +712,9 @@ export default function Home() {
                 {scanStep === "review" && scannedData && (() => {
                   const allFilled = scannedData.물품목록.every((_, i) => {
                     const v = parseInt(itemPersonnelInput[i] ?? "", 10);
-                    return v >= 1;
+                    const q = parseInt(itemQuantityInput[i] ?? "", 10);
+                    const name = (itemNameInput[i] ?? "").trim();
+                    return v >= 1 && q >= 1 && name.length > 0;
                   });
                   return (
                     <div className="p-5 space-y-4 pb-safe-bottom">
@@ -587,30 +751,44 @@ export default function Home() {
                             <span className="text-xs text-slate-400">{scannedData.물품목록.length}개</span>
                           </div>
                           {scannedData.물품목록.map((item, i) => (
-                            <div key={i} className="bg-white rounded-xl px-3 py-2.5 flex items-center gap-2">
-                              <MapPin className="w-3 h-3 text-indigo-400 shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-bold text-slate-800">
-                                  {item.품명}
-                                  <span className="ml-1.5 font-normal text-slate-400">×{item.수량}</span>
-                                </p>
-                                <p className="text-[11px] text-slate-400 truncate">{item.설치장소}</p>
-                              </div>
-                              <div className="shrink-0 flex items-center gap-1">
+                            <div key={i} className="bg-white rounded-xl p-3 border border-slate-200 space-y-2">
+                              {/* 행 1: 품명 + 수량 */}
+                              <div className="flex items-center gap-2">
+                                <MapPin className="w-3 h-3 text-indigo-400 shrink-0" />
                                 <input
-                                  type="number" min="1" max="99"
-                                  value={itemPersonnelInput[i] ?? ""}
-                                  onChange={e => setItemPersonnelInput(prev => ({ ...prev, [i]: e.target.value }))}
-                                  placeholder="0"
-                                  className="w-12 text-center bg-indigo-50 border border-indigo-200 rounded-xl px-1 py-1.5 text-sm font-black text-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                                  type="text"
+                                  value={itemNameInput[i] ?? item.품명}
+                                  onChange={e => setItemNameInput(prev => ({ ...prev, [i]: e.target.value }))}
+                                  className="flex-1 min-w-0 text-xs font-bold text-slate-800 border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                                 />
-                                <span className="text-xs text-slate-400">명</span>
+                                <span className="text-xs text-slate-400 shrink-0">×</span>
+                                <input
+                                  type="number" min="1" max="999"
+                                  value={itemQuantityInput[i] ?? ""}
+                                  onChange={e => setItemQuantityInput(prev => ({ ...prev, [i]: e.target.value }))}
+                                  placeholder="1"
+                                  className="w-12 text-center text-xs font-bold text-slate-700 border border-slate-200 rounded-lg px-1 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                                />
+                              </div>
+                              {/* 행 2: 설치장소 + 필요인원수 */}
+                              <div className="flex items-center gap-2 pl-5">
+                                <p className="text-[11px] text-slate-400 truncate flex-1">{item.설치장소}</p>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <input
+                                    type="number" min="1" max="99"
+                                    value={itemPersonnelInput[i] ?? ""}
+                                    onChange={e => setItemPersonnelInput(prev => ({ ...prev, [i]: e.target.value }))}
+                                    placeholder="0"
+                                    className="w-12 text-center bg-indigo-50 border border-indigo-200 rounded-lg px-1 py-1.5 text-xs font-black text-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                                  />
+                                  <span className="text-xs text-slate-400">명</span>
+                                </div>
                               </div>
                             </div>
                           ))}
                           {!allFilled && (
                             <p className="text-[11px] text-amber-500 pt-1">
-                              ⚠ 필요 인원 수를 입력해 주세요.
+                              ⚠ 품명과 필요 인원 수를 모두 입력해 주세요.
                             </p>
                           )}
                         </div>
@@ -638,6 +816,185 @@ export default function Home() {
                     </div>
                   );
                 })()}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* ── 출동 확인 팝업 ── */}
+      <AnimatePresence>
+        {dispatchPopup && (
+          <>
+            {/* 배경 */}
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => !routeLoading && setDispatchPopup(null)}
+              className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm"
+            />
+
+            {/* 바텀시트 */}
+            <motion.div
+              initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 30, stiffness: 300 }}
+              className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl flex flex-col max-h-[88dvh] shadow-2xl"
+            >
+              {/* 핸들 */}
+              <div className="flex justify-center pt-3 pb-1 shrink-0">
+                <div className="w-10 h-1 rounded-full bg-slate-200" />
+              </div>
+
+              {/* 헤더 */}
+              <div className="px-5 py-3.5 flex items-center justify-between border-b border-slate-100 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-1.5 rounded-xl bg-indigo-600">
+                    <Truck className="w-4 h-4 text-white" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-slate-800 text-sm">출동 동선 확인</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">{dispatchPopup.scheduledDateTime}</p>
+                  </div>
+                </div>
+                {!routeLoading && (
+                  <button onClick={() => setDispatchPopup(null)} className="p-2 rounded-full active:bg-slate-100 transition-colors">
+                    <X className="w-5 h-5 text-slate-400" />
+                  </button>
+                )}
+              </div>
+
+              {/* 본문 */}
+              <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-4 space-y-4">
+
+                {/* 투입 인원 정보 */}
+                <div className="flex items-center gap-3 bg-indigo-50 rounded-2xl px-4 py-3">
+                  <Users className="w-4 h-4 text-indigo-500 shrink-0" />
+                  <div>
+                    <p className="text-xs text-indigo-400 font-semibold">현재 투입 가능 인원</p>
+                    <p className="text-sm font-black text-indigo-700 mt-0.5">
+                      {staff.count > 0 ? `${staff.count}명 (${staff.label})` : "근무 시간 외"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* 최적 동선 섹션 */}
+                <div className="bg-slate-50 rounded-2xl p-4">
+                  <p className="text-xs font-bold text-slate-500 mb-3 flex items-center gap-1.5">
+                    <Navigation className="w-3.5 h-3.5" />
+                    최적 동선
+                  </p>
+
+                  {routeLoading && (
+                    <div className="flex items-center gap-2 py-4 justify-center">
+                      <Loader2 className="w-5 h-5 text-indigo-400 animate-spin" />
+                      <span className="text-sm text-slate-400 font-medium">동선 계산 중...</span>
+                    </div>
+                  )}
+
+                  {routeError && (
+                    <div className="flex items-start gap-2 text-red-500 bg-red-50 rounded-xl px-3 py-2.5">
+                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-xs font-bold">API 오류</p>
+                        <p className="text-[11px] mt-0.5 break-all">{routeError}</p>
+                        <button
+                          onClick={() => handleDispatchClick(dispatchPopup)}
+                          className="mt-2 flex items-center gap-1 text-[11px] font-bold text-red-500 underline"
+                        >
+                          <RefreshCw className="w-3 h-3" />재시도
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {!routeLoading && !routeError && routeData !== null && (() => {
+                    const route = extractRoute(routeData);
+                    return route ? (
+                      /* 경로 배열을 화살표로 시각화 */
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {route.map((stop, i) => (
+                          <div key={i} className="flex items-center gap-1.5">
+                            <span className="bg-indigo-600 text-white text-xs font-bold px-2.5 py-1 rounded-lg">
+                              {stop}
+                            </span>
+                            {i < route.length - 1 && (
+                              <ArrowRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      /* 파싱 불가 시 raw 데이터 표시 */
+                      <pre className="text-[11px] text-slate-600 bg-white rounded-xl p-3 overflow-x-auto whitespace-pre-wrap break-all max-h-40">
+                        {JSON.stringify(routeData, null, 2)}
+                      </pre>
+                    );
+                  })()}
+
+                  {/* API 응답 전 — 기존 클라이언트 동선 미리보기 */}
+                  {!routeLoading && routeData === null && !routeError && (
+                    <div className="flex flex-wrap items-center gap-1.5 opacity-40">
+                      {dispatchPopup.optimizedRoute.map((stop, i) => (
+                        <div key={i} className="flex items-center gap-1.5">
+                          <span className="bg-slate-400 text-white text-xs font-bold px-2.5 py-1 rounded-lg">
+                            {stop}
+                          </span>
+                          {i < dispatchPopup.optimizedRoute.length - 1 && (
+                            <ArrowRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* 물품 목록 요약 */}
+                <div>
+                  <p className="text-xs font-bold text-slate-500 mb-2 flex items-center gap-1.5">
+                    <Package className="w-3.5 h-3.5" />
+                    물품 목록 ({dispatchPopup.applications.reduce((s, a) => s + a.물품목록.length, 0)}개)
+                  </p>
+                  <div className="space-y-2">
+                    {dispatchPopup.applications.map(app => (
+                      <div key={app.id} className="bg-slate-50 rounded-xl p-3">
+                        <p className="text-xs font-bold text-slate-600 mb-2">
+                          {app.신청번호} · {app.신청부서}
+                        </p>
+                        <div className="space-y-1">
+                          {app.물품목록.map((item, i) => (
+                            <div key={i} className="flex items-center gap-2 text-xs">
+                              <MapPin className="w-3 h-3 text-indigo-400 shrink-0" />
+                              <span className="font-semibold text-slate-700">{item.품명}</span>
+                              <span className="text-slate-400">×{item.수량}</span>
+                              <ChevronRight className="w-3 h-3 text-slate-300 shrink-0" />
+                              <span className="text-slate-500 truncate">{item.설치장소}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* 하단 버튼 */}
+              <div className="px-5 pt-3 pb-safe-bottom border-t border-slate-100 flex gap-3 shrink-0">
+                <button
+                  onClick={() => setDispatchPopup(null)}
+                  disabled={routeLoading}
+                  className="flex-1 bg-slate-100 active:bg-slate-200 py-4 rounded-2xl font-bold text-slate-500 text-sm transition-all disabled:opacity-40"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={() => confirmDispatch(dispatchPopup.id)}
+                  disabled={routeLoading}
+                  className="flex-[2] flex items-center justify-center gap-2 bg-indigo-600 active:bg-indigo-700 py-4 rounded-2xl font-bold text-white text-sm transition-all disabled:opacity-40"
+                >
+                  {routeLoading
+                    ? <><Loader2 className="w-4 h-4 animate-spin" />계산 중...</>
+                    : <><Truck className="w-4 h-4" />출동 시작</>
+                  }
+                </button>
               </div>
             </motion.div>
           </>
