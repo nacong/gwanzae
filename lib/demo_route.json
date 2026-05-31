@@ -1,0 +1,1677 @@
+{
+  "입력": {
+    "투입인원수": 2,
+    "신청서": [
+      {
+        "품명": "신호처리장치",
+        "설치장소": "전정대 329",
+        "수량": 1,
+        "필요인원수": 2
+      },
+      {
+        "품명": "TV Monitor",
+        "설치장소": "전정대 566",
+        "수량": 1,
+        "필요인원수": 2
+      }
+    ]
+  },
+  "건물별경로안내": [
+    {
+      "건물명": "전정대",
+      "상태": "ok",
+      "시작노드": "N29",
+      "총방문노드순서": [
+        "N29",
+        "N23",
+        "N44",
+        "N62",
+        "N61",
+        "N62",
+        "N63",
+        "N64",
+        "N65",
+        "N66",
+        "N67",
+        "N68",
+        "N69",
+        "N70",
+        "N53",
+        "N50",
+        "N72",
+        "N108",
+        "N97",
+        "N98",
+        "N99",
+        "N100",
+        "N99",
+        "N98",
+        "N97",
+        "N108",
+        "N72",
+        "N50",
+        "N32",
+        "N34",
+        "N49",
+        "N48",
+        "N47",
+        "N46",
+        "N45",
+        "N44",
+        "N23",
+        "N29"
+      ],
+      "수거노드순서": [
+        "N61",
+        "N100"
+      ],
+      "수거호수순서": [
+        "329",
+        "566"
+      ],
+      "steps": [
+        {
+          "step_no": 1,
+          "step_type": "move_to_transition",
+          "guide_text": "엘리베이터로 이동하세요.",
+          "floor": "1F",
+          "node_sequence": [
+            "N29",
+            "N23"
+          ],
+          "nodes": [
+            {
+              "id": "N29",
+              "x": 985.0,
+              "y": 870.0,
+              "floor": "1F",
+              "assigned_rooms": [],
+              "node_type": "corridor",
+              "is_start": true,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N23",
+              "x": 981.0,
+              "y": 791.0,
+              "floor": "1F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            }
+          ],
+          "edges": [
+            {
+              "order": 1,
+              "from": "N29",
+              "to": "N23",
+              "from_floor": "1F",
+              "to_floor": "1F",
+              "edge_id": "E25",
+              "edge_type": "walk",
+              "length": 79.1,
+              "edge_cost": 79.1,
+              "is_floor_transition": false
+            }
+          ],
+          "trigger_node": "N23",
+          "is_last_step": false
+        },
+        {
+          "step_no": 2,
+          "step_type": "floor_transition",
+          "guide_text": "엘리베이터를 이용해서 3F로 이동하세요.",
+          "floor": "3F",
+          "node_sequence": [
+            "N23",
+            "N44",
+            "N62"
+          ],
+          "nodes": [
+            {
+              "id": "N23",
+              "x": 981.0,
+              "y": 791.0,
+              "floor": "1F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N44",
+              "x": 720.0,
+              "y": 872.0,
+              "floor": "2F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N62",
+              "x": 976.0,
+              "y": 788.0,
+              "floor": "3F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            }
+          ],
+          "edges": [
+            {
+              "order": 2,
+              "from": "N23",
+              "to": "N44",
+              "from_floor": "1F",
+              "to_floor": "2F",
+              "edge_id": "E54",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            },
+            {
+              "order": 3,
+              "from": "N44",
+              "to": "N62",
+              "from_floor": "2F",
+              "to_floor": "3F",
+              "edge_id": "E89",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            }
+          ],
+          "trigger_node": "N62",
+          "transition_edges": [
+            {
+              "order": 2,
+              "from": "N23",
+              "to": "N44",
+              "from_floor": "1F",
+              "to_floor": "2F",
+              "edge_id": "E54",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            },
+            {
+              "order": 3,
+              "from": "N44",
+              "to": "N62",
+              "from_floor": "2F",
+              "to_floor": "3F",
+              "edge_id": "E89",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            }
+          ],
+          "transition_edge": {
+            "order": 3,
+            "from": "N44",
+            "to": "N62",
+            "from_floor": "2F",
+            "to_floor": "3F",
+            "edge_id": "E89",
+            "edge_type": "elevator",
+            "length": 1.0,
+            "edge_cost": 100.0,
+            "is_floor_transition": true
+          },
+          "is_last_step": false
+        },
+        {
+          "step_no": 3,
+          "step_type": "pickup",
+          "guide_text": "329호에서 신호처리장치을 수거하세요.",
+          "floor": "3F",
+          "node_sequence": [
+            "N62",
+            "N61"
+          ],
+          "nodes": [
+            {
+              "id": "N62",
+              "x": 976.0,
+              "y": 788.0,
+              "floor": "3F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N61",
+              "x": 975.0,
+              "y": 945.0,
+              "floor": "3F",
+              "assigned_rooms": [
+                "330-2",
+                "330-1",
+                "331",
+                "327",
+                "329"
+              ],
+              "node_type": "corner",
+              "is_start": false,
+              "is_pickup": true,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": [
+                {
+                  "호수": "329",
+                  "품명": "신호처리장치",
+                  "수량": 1.0,
+                  "input_row_id": 1
+                }
+              ]
+            }
+          ],
+          "edges": [
+            {
+              "order": 4,
+              "from": "N62",
+              "to": "N61",
+              "from_floor": "3F",
+              "to_floor": "3F",
+              "edge_id": "E75",
+              "edge_type": "walk",
+              "length": 157.0,
+              "edge_cost": 157.0,
+              "is_floor_transition": false
+            }
+          ],
+          "trigger_node": "N61",
+          "is_last_step": false
+        },
+        {
+          "step_no": 4,
+          "step_type": "move_to_transition",
+          "guide_text": "엘리베이터로 이동하세요.",
+          "floor": "3F",
+          "node_sequence": [
+            "N61",
+            "N62",
+            "N63",
+            "N64",
+            "N65",
+            "N66",
+            "N67",
+            "N68",
+            "N69",
+            "N70",
+            "N53",
+            "N50"
+          ],
+          "nodes": [
+            {
+              "id": "N61",
+              "x": 975.0,
+              "y": 945.0,
+              "floor": "3F",
+              "assigned_rooms": [
+                "330-2",
+                "330-1",
+                "331",
+                "327",
+                "329"
+              ],
+              "node_type": "corner",
+              "is_start": false,
+              "is_pickup": true,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": [
+                {
+                  "호수": "329",
+                  "품명": "신호처리장치",
+                  "수량": 1.0,
+                  "input_row_id": 1
+                }
+              ]
+            },
+            {
+              "id": "N62",
+              "x": 976.0,
+              "y": 788.0,
+              "floor": "3F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N63",
+              "x": 968.0,
+              "y": 739.0,
+              "floor": "3F",
+              "assigned_rooms": [],
+              "node_type": "stair",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": true,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N64",
+              "x": 982.0,
+              "y": 649.0,
+              "floor": "3F",
+              "assigned_rooms": [
+                "326",
+                "325"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N65",
+              "x": 985.0,
+              "y": 471.0,
+              "floor": "3F",
+              "assigned_rooms": [
+                "324"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N66",
+              "x": 979.0,
+              "y": 379.0,
+              "floor": "3F",
+              "assigned_rooms": [
+                "320"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N67",
+              "x": 975.0,
+              "y": 155.0,
+              "floor": "3F",
+              "assigned_rooms": [
+                "323"
+              ],
+              "node_type": "corner",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N68",
+              "x": 808.0,
+              "y": 148.0,
+              "floor": "3F",
+              "assigned_rooms": [
+                "321",
+                "323-1",
+                "319",
+                "318"
+              ],
+              "node_type": "stair",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": true,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N69",
+              "x": 619.0,
+              "y": 149.0,
+              "floor": "3F",
+              "assigned_rooms": [
+                "315",
+                "317",
+                "316",
+                "314",
+                "313"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N70",
+              "x": 447.0,
+              "y": 145.0,
+              "floor": "3F",
+              "assigned_rooms": [
+                "310-2",
+                "311",
+                "309",
+                "310-1"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N53",
+              "x": 301.0,
+              "y": 153.0,
+              "floor": "3F",
+              "assigned_rooms": [
+                "307",
+                "305"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N50",
+              "x": 339.0,
+              "y": 229.0,
+              "floor": "3F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            }
+          ],
+          "edges": [
+            {
+              "order": 5,
+              "from": "N61",
+              "to": "N62",
+              "from_floor": "3F",
+              "to_floor": "3F",
+              "edge_id": "E75",
+              "edge_type": "walk",
+              "length": 157.0,
+              "edge_cost": 157.0,
+              "is_floor_transition": false
+            },
+            {
+              "order": 6,
+              "from": "N62",
+              "to": "N63",
+              "from_floor": "3F",
+              "to_floor": "3F",
+              "edge_id": "E76",
+              "edge_type": "walk",
+              "length": 49.65,
+              "edge_cost": 49.65,
+              "is_floor_transition": false
+            },
+            {
+              "order": 7,
+              "from": "N63",
+              "to": "N64",
+              "from_floor": "3F",
+              "to_floor": "3F",
+              "edge_id": "E77",
+              "edge_type": "walk",
+              "length": 91.08,
+              "edge_cost": 91.08,
+              "is_floor_transition": false
+            },
+            {
+              "order": 8,
+              "from": "N64",
+              "to": "N65",
+              "from_floor": "3F",
+              "to_floor": "3F",
+              "edge_id": "E78",
+              "edge_type": "walk",
+              "length": 178.03,
+              "edge_cost": 178.03,
+              "is_floor_transition": false
+            },
+            {
+              "order": 9,
+              "from": "N65",
+              "to": "N66",
+              "from_floor": "3F",
+              "to_floor": "3F",
+              "edge_id": "E79",
+              "edge_type": "walk",
+              "length": 92.2,
+              "edge_cost": 92.2,
+              "is_floor_transition": false
+            },
+            {
+              "order": 10,
+              "from": "N66",
+              "to": "N67",
+              "from_floor": "3F",
+              "to_floor": "3F",
+              "edge_id": "E80",
+              "edge_type": "walk",
+              "length": 224.04,
+              "edge_cost": 224.04,
+              "is_floor_transition": false
+            },
+            {
+              "order": 11,
+              "from": "N67",
+              "to": "N68",
+              "from_floor": "3F",
+              "to_floor": "3F",
+              "edge_id": "E81",
+              "edge_type": "walk",
+              "length": 167.15,
+              "edge_cost": 167.15,
+              "is_floor_transition": false
+            },
+            {
+              "order": 12,
+              "from": "N68",
+              "to": "N69",
+              "from_floor": "3F",
+              "to_floor": "3F",
+              "edge_id": "E82",
+              "edge_type": "walk",
+              "length": 189.0,
+              "edge_cost": 189.0,
+              "is_floor_transition": false
+            },
+            {
+              "order": 13,
+              "from": "N69",
+              "to": "N70",
+              "from_floor": "3F",
+              "to_floor": "3F",
+              "edge_id": "E62",
+              "edge_type": "walk",
+              "length": 172.05,
+              "edge_cost": 172.05,
+              "is_floor_transition": false
+            },
+            {
+              "order": 14,
+              "from": "N70",
+              "to": "N53",
+              "from_floor": "3F",
+              "to_floor": "3F",
+              "edge_id": "E63",
+              "edge_type": "walk",
+              "length": 146.22,
+              "edge_cost": 146.22,
+              "is_floor_transition": false
+            },
+            {
+              "order": 15,
+              "from": "N53",
+              "to": "N50",
+              "from_floor": "3F",
+              "to_floor": "3F",
+              "edge_id": "E64",
+              "edge_type": "walk",
+              "length": 84.97,
+              "edge_cost": 84.97,
+              "is_floor_transition": false
+            }
+          ],
+          "trigger_node": "N50",
+          "is_last_step": false
+        },
+        {
+          "step_no": 5,
+          "step_type": "floor_transition",
+          "guide_text": "엘리베이터를 이용해서 5F로 이동하세요.",
+          "floor": "5F",
+          "node_sequence": [
+            "N50",
+            "N72",
+            "N108"
+          ],
+          "nodes": [
+            {
+              "id": "N50",
+              "x": 339.0,
+              "y": 229.0,
+              "floor": "3F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N72",
+              "x": 328.0,
+              "y": 243.0,
+              "floor": "4F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N108",
+              "x": 312.0,
+              "y": 238.0,
+              "floor": "5F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            }
+          ],
+          "edges": [
+            {
+              "order": 16,
+              "from": "N50",
+              "to": "N72",
+              "from_floor": "3F",
+              "to_floor": "4F",
+              "edge_id": "E111",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            },
+            {
+              "order": 17,
+              "from": "N72",
+              "to": "N108",
+              "from_floor": "4F",
+              "to_floor": "5F",
+              "edge_id": "E138",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            }
+          ],
+          "trigger_node": "N108",
+          "transition_edges": [
+            {
+              "order": 16,
+              "from": "N50",
+              "to": "N72",
+              "from_floor": "3F",
+              "to_floor": "4F",
+              "edge_id": "E111",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            },
+            {
+              "order": 17,
+              "from": "N72",
+              "to": "N108",
+              "from_floor": "4F",
+              "to_floor": "5F",
+              "edge_id": "E138",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            }
+          ],
+          "transition_edge": {
+            "order": 17,
+            "from": "N72",
+            "to": "N108",
+            "from_floor": "4F",
+            "to_floor": "5F",
+            "edge_id": "E138",
+            "edge_type": "elevator",
+            "length": 1.0,
+            "edge_cost": 100.0,
+            "is_floor_transition": true
+          },
+          "is_last_step": false
+        },
+        {
+          "step_no": 6,
+          "step_type": "pickup",
+          "guide_text": "566호에서 TV Monitor을 수거하세요.",
+          "floor": "5F",
+          "node_sequence": [
+            "N108",
+            "N97",
+            "N98",
+            "N99",
+            "N100"
+          ],
+          "nodes": [
+            {
+              "id": "N108",
+              "x": 312.0,
+              "y": 238.0,
+              "floor": "5F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N97",
+              "x": 301.0,
+              "y": 156.0,
+              "floor": "5F",
+              "assigned_rooms": [
+                "508",
+                "507",
+                "505",
+                "503"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N98",
+              "x": 114.0,
+              "y": 147.0,
+              "floor": "5F",
+              "assigned_rooms": [
+                "501"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N99",
+              "x": 117.0,
+              "y": 434.0,
+              "floor": "5F",
+              "assigned_rooms": [
+                "569",
+                "570",
+                "568",
+                "565-3"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N100",
+              "x": 114.0,
+              "y": 714.0,
+              "floor": "5F",
+              "assigned_rooms": [
+                "566",
+                "565-1",
+                "565"
+              ],
+              "node_type": "stair",
+              "is_start": false,
+              "is_pickup": true,
+              "is_route_node": true,
+              "is_stair": true,
+              "is_elevator": false,
+              "pickup_items": [
+                {
+                  "호수": "566",
+                  "품명": "TV Monitor",
+                  "수량": 1.0,
+                  "input_row_id": 2
+                }
+              ]
+            }
+          ],
+          "edges": [
+            {
+              "order": 18,
+              "from": "N108",
+              "to": "N97",
+              "from_floor": "5F",
+              "to_floor": "5F",
+              "edge_id": "E121",
+              "edge_type": "walk",
+              "length": 82.73,
+              "edge_cost": 82.73,
+              "is_floor_transition": false
+            },
+            {
+              "order": 19,
+              "from": "N97",
+              "to": "N98",
+              "from_floor": "5F",
+              "to_floor": "5F",
+              "edge_id": "E124",
+              "edge_type": "walk",
+              "length": 187.22,
+              "edge_cost": 187.22,
+              "is_floor_transition": false
+            },
+            {
+              "order": 20,
+              "from": "N98",
+              "to": "N99",
+              "from_floor": "5F",
+              "to_floor": "5F",
+              "edge_id": "E125",
+              "edge_type": "walk",
+              "length": 287.02,
+              "edge_cost": 287.02,
+              "is_floor_transition": false
+            },
+            {
+              "order": 21,
+              "from": "N99",
+              "to": "N100",
+              "from_floor": "5F",
+              "to_floor": "5F",
+              "edge_id": "E126",
+              "edge_type": "walk",
+              "length": 280.02,
+              "edge_cost": 280.02,
+              "is_floor_transition": false
+            }
+          ],
+          "trigger_node": "N100",
+          "is_last_step": false
+        },
+        {
+          "step_no": 7,
+          "step_type": "move_to_transition",
+          "guide_text": "엘리베이터로 이동하세요.",
+          "floor": "5F",
+          "node_sequence": [
+            "N100",
+            "N99",
+            "N98",
+            "N97",
+            "N108"
+          ],
+          "nodes": [
+            {
+              "id": "N100",
+              "x": 114.0,
+              "y": 714.0,
+              "floor": "5F",
+              "assigned_rooms": [
+                "566",
+                "565-1",
+                "565"
+              ],
+              "node_type": "stair",
+              "is_start": false,
+              "is_pickup": true,
+              "is_route_node": true,
+              "is_stair": true,
+              "is_elevator": false,
+              "pickup_items": [
+                {
+                  "호수": "566",
+                  "품명": "TV Monitor",
+                  "수량": 1.0,
+                  "input_row_id": 2
+                }
+              ]
+            },
+            {
+              "id": "N99",
+              "x": 117.0,
+              "y": 434.0,
+              "floor": "5F",
+              "assigned_rooms": [
+                "569",
+                "570",
+                "568",
+                "565-3"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N98",
+              "x": 114.0,
+              "y": 147.0,
+              "floor": "5F",
+              "assigned_rooms": [
+                "501"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N97",
+              "x": 301.0,
+              "y": 156.0,
+              "floor": "5F",
+              "assigned_rooms": [
+                "508",
+                "507",
+                "505",
+                "503"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N108",
+              "x": 312.0,
+              "y": 238.0,
+              "floor": "5F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            }
+          ],
+          "edges": [
+            {
+              "order": 22,
+              "from": "N100",
+              "to": "N99",
+              "from_floor": "5F",
+              "to_floor": "5F",
+              "edge_id": "E126",
+              "edge_type": "walk",
+              "length": 280.02,
+              "edge_cost": 280.02,
+              "is_floor_transition": false
+            },
+            {
+              "order": 23,
+              "from": "N99",
+              "to": "N98",
+              "from_floor": "5F",
+              "to_floor": "5F",
+              "edge_id": "E125",
+              "edge_type": "walk",
+              "length": 287.02,
+              "edge_cost": 287.02,
+              "is_floor_transition": false
+            },
+            {
+              "order": 24,
+              "from": "N98",
+              "to": "N97",
+              "from_floor": "5F",
+              "to_floor": "5F",
+              "edge_id": "E124",
+              "edge_type": "walk",
+              "length": 187.22,
+              "edge_cost": 187.22,
+              "is_floor_transition": false
+            },
+            {
+              "order": 25,
+              "from": "N97",
+              "to": "N108",
+              "from_floor": "5F",
+              "to_floor": "5F",
+              "edge_id": "E121",
+              "edge_type": "walk",
+              "length": 82.73,
+              "edge_cost": 82.73,
+              "is_floor_transition": false
+            }
+          ],
+          "trigger_node": "N108",
+          "is_last_step": false
+        },
+        {
+          "step_no": 8,
+          "step_type": "floor_transition",
+          "guide_text": "엘리베이터를 이용해서 2F로 이동하세요.",
+          "floor": "2F",
+          "node_sequence": [
+            "N108",
+            "N72",
+            "N50",
+            "N32"
+          ],
+          "nodes": [
+            {
+              "id": "N108",
+              "x": 312.0,
+              "y": 238.0,
+              "floor": "5F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N72",
+              "x": 328.0,
+              "y": 243.0,
+              "floor": "4F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N50",
+              "x": 339.0,
+              "y": 229.0,
+              "floor": "3F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N32",
+              "x": 231.0,
+              "y": 461.0,
+              "floor": "2F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            }
+          ],
+          "edges": [
+            {
+              "order": 26,
+              "from": "N108",
+              "to": "N72",
+              "from_floor": "5F",
+              "to_floor": "4F",
+              "edge_id": "E138",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            },
+            {
+              "order": 27,
+              "from": "N72",
+              "to": "N50",
+              "from_floor": "4F",
+              "to_floor": "3F",
+              "edge_id": "E111",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            },
+            {
+              "order": 28,
+              "from": "N50",
+              "to": "N32",
+              "from_floor": "3F",
+              "to_floor": "2F",
+              "edge_id": "E85",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            }
+          ],
+          "trigger_node": "N32",
+          "transition_edges": [
+            {
+              "order": 26,
+              "from": "N108",
+              "to": "N72",
+              "from_floor": "5F",
+              "to_floor": "4F",
+              "edge_id": "E138",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            },
+            {
+              "order": 27,
+              "from": "N72",
+              "to": "N50",
+              "from_floor": "4F",
+              "to_floor": "3F",
+              "edge_id": "E111",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            },
+            {
+              "order": 28,
+              "from": "N50",
+              "to": "N32",
+              "from_floor": "3F",
+              "to_floor": "2F",
+              "edge_id": "E85",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            }
+          ],
+          "transition_edge": {
+            "order": 28,
+            "from": "N50",
+            "to": "N32",
+            "from_floor": "3F",
+            "to_floor": "2F",
+            "edge_id": "E85",
+            "edge_type": "elevator",
+            "length": 1.0,
+            "edge_cost": 100.0,
+            "is_floor_transition": true
+          },
+          "is_last_step": false
+        },
+        {
+          "step_no": 9,
+          "step_type": "move_to_transition",
+          "guide_text": "엘리베이터로 이동하세요.",
+          "floor": "2F",
+          "node_sequence": [
+            "N32",
+            "N34",
+            "N49",
+            "N48",
+            "N47",
+            "N46",
+            "N45",
+            "N44"
+          ],
+          "nodes": [
+            {
+              "id": "N32",
+              "x": 231.0,
+              "y": 461.0,
+              "floor": "2F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N34",
+              "x": 220.0,
+              "y": 409.0,
+              "floor": "2F",
+              "assigned_rooms": [],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N49",
+              "x": 387.0,
+              "y": 409.0,
+              "floor": "2F",
+              "assigned_rooms": [
+                "201",
+                "202",
+                "202-1"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N48",
+              "x": 588.0,
+              "y": 402.0,
+              "floor": "2F",
+              "assigned_rooms": [
+                "203-2",
+                "203",
+                "204"
+              ],
+              "node_type": "stair",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": true,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N47",
+              "x": 708.0,
+              "y": 404.0,
+              "floor": "2F",
+              "assigned_rooms": [
+                "205",
+                "203-3"
+              ],
+              "node_type": "corner",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N46",
+              "x": 714.0,
+              "y": 700.0,
+              "floor": "2F",
+              "assigned_rooms": [
+                "207",
+                "209",
+                "208",
+                "210"
+              ],
+              "node_type": "corridor",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N45",
+              "x": 699.0,
+              "y": 832.0,
+              "floor": "2F",
+              "assigned_rooms": [],
+              "node_type": "stair",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": true,
+              "is_elevator": false,
+              "pickup_items": []
+            },
+            {
+              "id": "N44",
+              "x": 720.0,
+              "y": 872.0,
+              "floor": "2F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            }
+          ],
+          "edges": [
+            {
+              "order": 29,
+              "from": "N32",
+              "to": "N34",
+              "from_floor": "2F",
+              "to_floor": "2F",
+              "edge_id": "E36",
+              "edge_type": "walk",
+              "length": 53.15,
+              "edge_cost": 53.15,
+              "is_floor_transition": false
+            },
+            {
+              "order": 30,
+              "from": "N34",
+              "to": "N49",
+              "from_floor": "2F",
+              "to_floor": "2F",
+              "edge_id": "E35",
+              "edge_type": "walk",
+              "length": 167.0,
+              "edge_cost": 167.0,
+              "is_floor_transition": false
+            },
+            {
+              "order": 31,
+              "from": "N49",
+              "to": "N48",
+              "from_floor": "2F",
+              "to_floor": "2F",
+              "edge_id": "E53",
+              "edge_type": "walk",
+              "length": 201.12,
+              "edge_cost": 201.12,
+              "is_floor_transition": false
+            },
+            {
+              "order": 32,
+              "from": "N48",
+              "to": "N47",
+              "from_floor": "2F",
+              "to_floor": "2F",
+              "edge_id": "E52",
+              "edge_type": "walk",
+              "length": 120.02,
+              "edge_cost": 120.02,
+              "is_floor_transition": false
+            },
+            {
+              "order": 33,
+              "from": "N47",
+              "to": "N46",
+              "from_floor": "2F",
+              "to_floor": "2F",
+              "edge_id": "E51",
+              "edge_type": "walk",
+              "length": 296.06,
+              "edge_cost": 296.06,
+              "is_floor_transition": false
+            },
+            {
+              "order": 34,
+              "from": "N46",
+              "to": "N45",
+              "from_floor": "2F",
+              "to_floor": "2F",
+              "edge_id": "E50",
+              "edge_type": "walk",
+              "length": 132.85,
+              "edge_cost": 132.85,
+              "is_floor_transition": false
+            },
+            {
+              "order": 35,
+              "from": "N45",
+              "to": "N44",
+              "from_floor": "2F",
+              "to_floor": "2F",
+              "edge_id": "E49",
+              "edge_type": "walk",
+              "length": 45.18,
+              "edge_cost": 45.18,
+              "is_floor_transition": false
+            }
+          ],
+          "trigger_node": "N44",
+          "is_last_step": false
+        },
+        {
+          "step_no": 10,
+          "step_type": "floor_transition",
+          "guide_text": "엘리베이터를 이용해서 1F로 이동하세요.",
+          "floor": "1F",
+          "node_sequence": [
+            "N44",
+            "N23"
+          ],
+          "nodes": [
+            {
+              "id": "N44",
+              "x": 720.0,
+              "y": 872.0,
+              "floor": "2F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N23",
+              "x": 981.0,
+              "y": 791.0,
+              "floor": "1F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            }
+          ],
+          "edges": [
+            {
+              "order": 36,
+              "from": "N44",
+              "to": "N23",
+              "from_floor": "2F",
+              "to_floor": "1F",
+              "edge_id": "E54",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            }
+          ],
+          "trigger_node": "N23",
+          "transition_edges": [
+            {
+              "order": 36,
+              "from": "N44",
+              "to": "N23",
+              "from_floor": "2F",
+              "to_floor": "1F",
+              "edge_id": "E54",
+              "edge_type": "elevator",
+              "length": 1.0,
+              "edge_cost": 100.0,
+              "is_floor_transition": true
+            }
+          ],
+          "transition_edge": {
+            "order": 36,
+            "from": "N44",
+            "to": "N23",
+            "from_floor": "2F",
+            "to_floor": "1F",
+            "edge_id": "E54",
+            "edge_type": "elevator",
+            "length": 1.0,
+            "edge_cost": 100.0,
+            "is_floor_transition": true
+          },
+          "is_last_step": false
+        },
+        {
+          "step_no": 11,
+          "step_type": "exit",
+          "guide_text": "출구로 이동하세요.",
+          "floor": "1F",
+          "node_sequence": [
+            "N23",
+            "N29"
+          ],
+          "nodes": [
+            {
+              "id": "N23",
+              "x": 981.0,
+              "y": 791.0,
+              "floor": "1F",
+              "assigned_rooms": [],
+              "node_type": "elevator",
+              "is_start": false,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": true,
+              "pickup_items": []
+            },
+            {
+              "id": "N29",
+              "x": 985.0,
+              "y": 870.0,
+              "floor": "1F",
+              "assigned_rooms": [],
+              "node_type": "corridor",
+              "is_start": true,
+              "is_pickup": false,
+              "is_route_node": true,
+              "is_stair": false,
+              "is_elevator": false,
+              "pickup_items": []
+            }
+          ],
+          "edges": [
+            {
+              "order": 37,
+              "from": "N23",
+              "to": "N29",
+              "from_floor": "1F",
+              "to_floor": "1F",
+              "edge_id": "E25",
+              "edge_type": "walk",
+              "length": 79.1,
+              "edge_cost": 79.1,
+              "is_floor_transition": false
+            }
+          ],
+          "trigger_node": "N29",
+          "is_last_step": true
+        }
+      ],
+      "meta": {
+        "algorithm": "Dijkstra + Exact TSP",
+        "total_cost": 5355.95,
+        "dispatch_people": 2.0,
+        "total_stair_edges": 0,
+        "total_consecutive_stair_edges": 0,
+        "stair_policy": {
+          "elevator_exists": true,
+          "dispatch_people": 2.0,
+          "max_required_people": 2.0,
+          "avoid_stairs": true,
+          "penalize_consecutive_stairs": true,
+          "reason": "필요인원수 2 이상 물품 존재"
+        }
+      }
+    }
+  ]
+}
