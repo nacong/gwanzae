@@ -83,6 +83,23 @@ export function getCurrentStaffStatus(): StaffStatus {
   return { count: 0, label: "근무 시간 외" };
 }
 
+export function getCurrentStaffNames(): string[] {
+  const now = new Date();
+  const day = now.getDay();
+  const hour = now.getHours();
+
+  const slots = SCHEDULE[day];
+  if (slots) {
+    for (const slot of slots) {
+      if (hour >= slot.start && hour < slot.end) {
+        return slot.staff;
+      }
+    }
+  }
+
+  return [];
+}
+
 export const BUILDINGS = [
   "공학관", "공학실험동", "국제경영대학관", "국제학관", "글로벌관",
   "도예관", "멀티미디어관", "생명과학대학관", "선승관",
