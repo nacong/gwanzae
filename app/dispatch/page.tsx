@@ -95,14 +95,60 @@ function buildNodeMap(nodes: EnrichedNode[]) {
   return m;
 }
 
-/** node_sequence에서 특정 층 노드만 걸러 SVG path 생성 */
+/* ─── 경로 표시용 후처리 ─────────────────────────────────── */
+
+type Pt = { x: number; y: number };
+
+function ptToLine(p: Pt, a: Pt, b: Pt): number {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  if (dx === 0 && dy === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy);
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+function simplifyRoute(pts: Pt[], tol = 10): Pt[] {
+  if (pts.length <= 2) return pts;
+  let maxD = 0, idx = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = ptToLine(pts[i], pts[0], pts[pts.length - 1]);
+    if (d > maxD) { maxD = d; idx = i; }
+  }
+  if (maxD > tol) {
+    const l = simplifyRoute(pts.slice(0, idx + 1), tol);
+    const r = simplifyRoute(pts.slice(idx), tol);
+    return l.slice(0, -1).concat(r);
+  }
+  return [pts[0], pts[pts.length - 1]];
+}
+
+function makeRoundedPath(pts: Pt[], radius = 20): string {
+  if (pts.length === 0) return "";
+  if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
+  const d = [`M ${pts[0].x} ${pts[0].y}`];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const prev = pts[i - 1], curr = pts[i], next = pts[i + 1];
+    const v1 = { x: prev.x - curr.x, y: prev.y - curr.y };
+    const v2 = { x: next.x - curr.x, y: next.y - curr.y };
+    const l1 = Math.hypot(v1.x, v1.y), l2 = Math.hypot(v2.x, v2.y);
+    if (l1 === 0 || l2 === 0) continue;
+    const r = Math.min(radius, l1 / 2, l2 / 2);
+    const p1 = { x: curr.x + (v1.x / l1) * r, y: curr.y + (v1.y / l1) * r };
+    const p2 = { x: curr.x + (v2.x / l2) * r, y: curr.y + (v2.y / l2) * r };
+    d.push(`L ${p1.x} ${p1.y}`, `Q ${curr.x} ${curr.y} ${p2.x} ${p2.y}`);
+  }
+  d.push(`L ${pts[pts.length - 1].x} ${pts[pts.length - 1].y}`);
+  return d.join(" ");
+}
+
+/** node_sequence에서 특정 층 노드만 걸러 SVG path 생성 (RDP 단순화 + 둥근 코너) */
 function buildPath(seq: string[], nm: Map<string, EnrichedNode>, floor: string): string {
-  const pts: string[] = [];
+  const raw: Pt[] = [];
   for (const id of seq) {
     const n = nm.get(id);
-    if (n?.floor === floor) pts.push(`${n.px},${n.py}`);
+    if (n?.floor === floor) raw.push({ x: n.px, y: n.py });
   }
-  return pts.length >= 2 ? `M ${pts.join(" L ")}` : "";
+  if (raw.length < 2) return "";
+  return makeRoundedPath(simplifyRoute(raw, 20), 20);
 }
 
 /** 노드 집합의 tight viewBox 계산 */
@@ -199,11 +245,6 @@ function NodeDot({ n, color, role }: { n: EnrichedNode; color: string; role?: "s
     <g>
       <circle cx={px} cy={py} r={28} fill={dotColor} opacity={0.18} />
       <circle cx={px} cy={py} r={16} fill={dotColor} stroke="white" strokeWidth={4} />
-      {n.pickup_items.map((it, i) => (
-        <text key={i} x={px} y={py - 30} textAnchor="middle" fontSize={26} fontWeight="800" fill={dotColor}>
-          {it.호수}호
-        </text>
-      ))}
     </g>
   );
   if (n.is_elevator) {
@@ -278,7 +319,7 @@ function FloorMapReal({ animKey, fNodes, pathD, floorImg, imageW, imageH, transf
               style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
               <style>{CSS_ANIM}</style>
               <AnimatedPath d={pathD} animKey={animKey} color={color} />
-              {fNodes.map(n => <NodeDot key={n.id} n={n} color={color} role={roles[n.id]} />)}
+              {fNodes.filter(n => roles[n.id]).map(n => <NodeDot key={n.id} n={n} color={color} role={roles[n.id]} />)}
             </svg>
           </div>
         </TransformComponent>
@@ -317,7 +358,7 @@ function FloorMapSchematic({ animKey, fNodes, pathD, displayFloor, nodeSequence 
             {n.assigned_rooms.slice(0, 2).join("·")}
           </text>
         ))}
-        {fNodes.map(n => <NodeDot key={n.id} n={n} color={color} role={roles[n.id]} />)}
+        {fNodes.filter(n => roles[n.id]).map(n => <NodeDot key={n.id} n={n} color={color} role={roles[n.id]} />)}
       </svg>
     </div>
   );
