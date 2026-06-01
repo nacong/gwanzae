@@ -1,11 +1,21 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
-import rawRoute from "@/lib/demo_route.json";
 import mappingRaw from "@/lib/mapping.json";
 
 /* ─── constants ──────────────────────────────────────────── */
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+
+const DEFAULT_REQUEST = {
+  투입인원수: 2,
+  신청서: [
+    { 품명: "신호처리장치", 설치장소: "전정대 329", 수량: 1, 필요인원수: 2 },
+    { 품명: "TV Monitor",   설치장소: "전정대 566", 수량: 1, 필요인원수: 2 },
+  ],
+};
 
 /** 백엔드 건물명 약칭 → mapping.json 키 */
 const ALIAS: Record<string, string> = { "전정대": "전자정보대학" };
@@ -23,13 +33,6 @@ const FLOOR_COLOR: Record<string, string> = {
   "4F": "#2E7D32", "5F": "#E65100",
 };
 
-const STEP_TYPE: Record<string, { label: string; color: string; bg: string }> = {
-  move_to_transition: { label: "이동",   color: "#546E7A", bg: "#ECEFF1" },
-  floor_transition:   { label: "층 이동", color: "#1565C0", bg: "#E3F2FD" },
-  pickup:             { label: "수거",   color: "#BF360C", bg: "#FBE9E7" },
-  exit:               { label: "완료",   color: "#1B5E20", bg: "#E8F5E9" },
-};
-
 const CSS_ANIM = `@keyframes dispatchDraw { to { stroke-dashoffset: 0; } }`;
 
 /* ─── types ──────────────────────────────────────────────── */
@@ -44,7 +47,7 @@ interface NodeData {
 }
 
 interface EnrichedNode extends NodeData {
-  px: number; py: number; /* 변환된 픽셀 좌표 */
+  px: number; py: number;
 }
 
 interface EdgeData {
@@ -59,33 +62,31 @@ interface StepData {
   trigger_node: string; is_last_step: boolean;
 }
 
-/* ─── data ───────────────────────────────────────────────── */
+interface RouteBuilding {
+  건물명: string;
+  상태: string;
+  steps: StepData[];
+}
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const BDATA    = (rawRoute as any).건물별경로안내[0];
-const BLD_NAME: string  = BDATA.건물명;
-const STEPS: StepData[] = BDATA.steps;
-const MAPPED   = ALIAS[BLD_NAME] ?? BLD_NAME;
+type RouteResponse = RouteBuilding[];
 
 /* ─── helpers ────────────────────────────────────────────── */
 
 function floorLabel(f: string) { return f.replace(/(\d+)F/, "$1층"); }
 
-/** 노드 좌표계 → 도면 픽셀 좌표 변환 */
-function enrichNodes(nodes: NodeData[]): EnrichedNode[] {
+function enrichNodes(nodes: NodeData[], mapped: string): EnrichedNode[] {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapping = mappingRaw as any;
   return nodes.map(n => {
-    const m = mapping[MAPPED]?.[n.floor];
+    const m = mapping[mapped]?.[n.floor];
     if (m) return { ...n, px: n.x * m.scale_x + m.offset_x, py: n.y * m.scale_y + m.offset_y };
     return { ...n, px: n.x, py: n.y };
   });
 }
 
-/** floor 에 해당하는 image 크기 */
-function imageDims(floor: string): { w: number; h: number } {
+function imageDims(floor: string, mapped: string): { w: number; h: number } {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const m = (mappingRaw as any)[MAPPED]?.[floor];
+  const m = (mappingRaw as any)[mapped]?.[floor];
   return m ? { w: m.image_width, h: m.image_height } : { w: 1448, h: 1086 };
 }
 
@@ -140,7 +141,6 @@ function makeRoundedPath(pts: Pt[], radius = 20): string {
   return d.join(" ");
 }
 
-/** node_sequence에서 특정 층 노드만 걸러 SVG path 생성 (RDP 단순화 + 둥근 코너) */
 function buildPath(seq: string[], nm: Map<string, EnrichedNode>, floor: string): string {
   const raw: Pt[] = [];
   for (const id of seq) {
@@ -151,7 +151,6 @@ function buildPath(seq: string[], nm: Map<string, EnrichedNode>, floor: string):
   return makeRoundedPath(simplifyRoute(raw, 20), 20);
 }
 
-/** 노드 집합의 tight viewBox 계산 */
 function viewBoxFor(nodes: EnrichedNode[], pad = 150): string {
   if (!nodes.length) return "0 0 1448 1086";
   const xs = nodes.map(n => n.px), ys = nodes.map(n => n.py);
@@ -160,11 +159,10 @@ function viewBoxFor(nodes: EnrichedNode[], pad = 150): string {
   return `${x1} ${y1} ${x2 - x1} ${y2 - y1}`;
 }
 
-
 /* ─── AnimatedPath ───────────────────────────────────────── */
 
-const INIT_DUR = 2000;   // path 그리기 애니메이션 시간 (ms) — CSS 와 동일
-const LOOP_DUR = 3800;   // 화살표 루프 한 바퀴 시간 (ms)
+const INIT_DUR = 2000;
+const LOOP_DUR = 3800;
 
 function AnimatedPath({ d, color = "#1976D2", width = 12, animKey }: {
   d: string; color?: string; width?: number; animKey: number;
@@ -179,7 +177,6 @@ function AnimatedPath({ d, color = "#1976D2", width = 12, animKey }: {
     const line = lineRef.current, halo = haloRef.current, arrow = arrowRef.current;
     if (!line || !halo || !arrow || !d) return;
 
-    // ── CSS draw animation ──
     const len = line.getTotalLength();
     [line, halo].forEach(el => {
       el.style.strokeDasharray = String(len);
@@ -191,7 +188,6 @@ function AnimatedPath({ d, color = "#1976D2", width = 12, animKey }: {
       el.style.animation = `dispatchDraw 2s cubic-bezier(.18,.72,.18,1) forwards`;
     });
 
-    // ── Arrow RAF animation ──
     let startTime: number | null = null;
 
     function placeArrow(frac: number) {
@@ -223,8 +219,7 @@ function AnimatedPath({ d, color = "#1976D2", width = 12, animKey }: {
       <path ref={haloRef} d={d} fill="none" stroke="rgba(255,255,255,0.88)"
         strokeWidth={width + 10} strokeLinecap="round" strokeLinejoin="round" />
       <path ref={lineRef} d={d} fill="none" stroke={color} strokeWidth={width}
-        strokeLinecap="round" strokeLinejoin="round"
-         />
+        strokeLinecap="round" strokeLinejoin="round" />
       <g ref={arrowRef}>
         <polygon points="34,0 -15,-18 -7,0 -15,18"
           fill={color} stroke="white" strokeWidth={4} strokeLinejoin="round" />
@@ -236,6 +231,7 @@ function AnimatedPath({ d, color = "#1976D2", width = 12, animKey }: {
 /* ─── NodeDot ────────────────────────────────────────────── */
 
 const START_COLOR = "#E53935";
+const MAP_COLOR   = "#1976D2";
 
 function NodeDot({ n, color, role }: { n: EnrichedNode; color: string; role?: "start" | "end" }) {
   const { px, py } = n;
@@ -255,10 +251,6 @@ function NodeDot({ n, color, role }: { n: EnrichedNode; color: string; role?: "s
   return <circle cx={px} cy={py} r={9} fill={color} stroke="white" strokeWidth={2} />;
 }
 
-/* ─── FloorMapReal (실제 도면 이미지) ───────────────────── */
-
-const MAP_COLOR = "#1976D2";
-
 function nodeRoles(fNodes: EnrichedNode[], nodeSequence: string[]): Record<string, "start" | "end"> {
   const fIds = new Set(fNodes.map(n => n.id));
   const onFloor = nodeSequence.filter(id => fIds.has(id));
@@ -267,6 +259,8 @@ function nodeRoles(fNodes: EnrichedNode[], nodeSequence: string[]): Record<strin
   if (onFloor.length > 1) roles[onFloor[onFloor.length - 1]] = "end";
   return roles;
 }
+
+/* ─── FloorMapReal ───────────────────────────────────────── */
 
 function FloorMapReal({ animKey, fNodes, pathD, floorImg, imageW, imageH, transformRef, nodeSequence }: {
   animKey: number; fNodes: EnrichedNode[]; pathD: string;
@@ -283,15 +277,12 @@ function FloorMapReal({ animKey, fNodes, pathD, floorImg, imageW, imageH, transf
     if (!api || !el) return;
     const cW = el.clientWidth, cH = el.clientHeight;
 
-    // objectFit:contain 기준 실제 이미지 렌더 크기
     const iAspect = imageW / imageH, cAspect = cW / cH;
     let iW: number, iH: number;
     if (iAspect > cAspect) { iW = cW; iH = cW / iAspect; }
     else { iH = cH; iW = cH * iAspect; }
 
     const avH = cH - 220;
-
-    // 경로 중심으로 즉시 확대 (애니메이션 없음)
     const zoom = Math.min(avH / (iH * 1.2), 8);
     const imgOffX = (cW - iW) / 2, imgOffY = (cH - iH) / 2;
     let cx = cW / 2, cy = avH / 2;
@@ -328,20 +319,17 @@ function FloorMapReal({ animKey, fNodes, pathD, floorImg, imageW, imageH, transf
   );
 }
 
-/* ─── FloorMapSchematic (도면 없는 층 다이어그램) ─────── */
+/* ─── FloorMapSchematic ──────────────────────────────────── */
 
-function FloorMapSchematic({ animKey, fNodes, pathD, displayFloor, nodeSequence }: {
+function FloorMapSchematic({ animKey, fNodes, pathD, nodeSequence }: {
   animKey: number; fNodes: EnrichedNode[]; pathD: string; displayFloor: string; nodeSequence: string[];
 }) {
-  const color  = MAP_COLOR;
-  const roles  = nodeRoles(fNodes, nodeSequence);
-  const vBox   = useMemo(() => viewBoxFor(fNodes), [fNodes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const color = MAP_COLOR;
+  const roles = nodeRoles(fNodes, nodeSequence);
+  const vBox  = useMemo(() => viewBoxFor(fNodes), [fNodes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div style={{
-      position: "absolute", inset: 0,
-      background: "#fff",
-    }}>
+    <div style={{ position: "absolute", inset: 0, background: "#fff" }}>
       <svg viewBox={vBox} preserveAspectRatio="xMidYMid meet"
         style={{ width: "100%", height: "calc(100% - 220px)" }}>
         <style>{CSS_ANIM}</style>
@@ -377,23 +365,16 @@ function BottomPanel({ step, stepIdx, total, onPrev, onNext }: {
       padding: "14px 20px calc(20px + env(safe-area-inset-bottom))",
       display: "flex", flexDirection: "column", gap: 10,
     }}>
-      {/* 진행 바 */}
       <div style={{ height: 3, background: "#eee", borderRadius: 99, overflow: "hidden" }}>
         <div style={{
           height: "100%", width: `${((stepIdx + 1) / total) * 100}%`,
           background: "#111", borderRadius: 99, transition: "width 0.4s ease",
         }} />
       </div>
-
-      {/* 카운터 */}
       <span style={{ fontSize: 13, color: "#aaa", fontWeight: 600 }}>{stepIdx + 1} / {total}</span>
-
-      {/* 안내 텍스트 */}
       <div style={{ fontSize: 22, fontWeight: 800, lineHeight: 1.45, color: "#111" }}>
         {step.guide_text}
       </div>
-
-      {/* 버튼 */}
       <div style={{ display: "flex", gap: 10 }}>
         <button onClick={onPrev} disabled={stepIdx === 0} style={{
           flex: 1, padding: "14px 0", borderRadius: 14, border: "none",
@@ -401,11 +382,9 @@ function BottomPanel({ step, stepIdx, total, onPrev, onNext }: {
           color: stepIdx === 0 ? "#ccc" : "#444",
           fontWeight: 700, fontSize: 16, cursor: stepIdx === 0 ? "default" : "pointer",
         }}>이전</button>
-        <button onClick={onNext} disabled={step.is_last_step} style={{
+        <button onClick={onNext} style={{
           flex: 3, padding: "14px 0", borderRadius: 14, border: "none",
-          background: step.is_last_step ? "#555" : "#111",
-          color: "white", fontWeight: 700, fontSize: 16,
-          cursor: step.is_last_step ? "default" : "pointer",
+          background: "#111", color: "white", fontWeight: 700, fontSize: 16, cursor: "pointer",
         }}>
           {step.is_last_step ? "✓ 수거 완료" : "다음 →"}
         </button>
@@ -417,25 +396,148 @@ function BottomPanel({ step, stepIdx, total, onPrev, onNext }: {
 /* ─── Page ───────────────────────────────────────────────── */
 
 export default function DispatchPage() {
-  const [stepIdx, setStepIdx] = useState(0);
-  const [animKey, setAnimKey] = useState(0);
+  const router = useRouter();
+  const [routeData,    setRouteData]    = useState<RouteResponse | null>(null);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState<string | null>(null);
+  const [rawResponse,  setRawResponse]  = useState<string | null>(null);
+  const [retryCount,   setRetryCount]   = useState(0);
+
+  const [stepIdx,  setStepIdx]  = useState(0);
+  const [animKey,  setAnimKey]  = useState(0);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const transformRef = useRef<any>(null);
 
-  const step = STEPS[stepIdx];
-  const dFloor     = step.floor;
-  const floorColor = FLOOR_COLOR[dFloor] ?? "#607D8B";
-  const floorImg   = FLOOR_IMAGES[dFloor] ?? null;
+  useEffect(() => {
+    async function fetchRoute() {
+      setLoading(true);
+      setError(null);
+      setRawResponse(null);
+      try {
+        const saved = localStorage.getItem("gwanzae-dispatch-request");
+        const request = saved ? JSON.parse(saved) : DEFAULT_REQUEST;
+        const res = await fetch(`${API_BASE}/optimize/route`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        });
+        const text = await res.text();
+        console.log("[dispatch] status:", res.status, "body:", text);
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+        let data: RouteResponse;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error(`JSON 파싱 실패: ${text.slice(0, 200)}`);
+        }
+        if (!Array.isArray(data) || data.length === 0) {
+          setRawResponse(JSON.stringify(data, null, 2));
+          throw new Error("응답 배열이 비어있습니다.");
+        }
+        setRouteData(data);
+        setStepIdx(0);
+        setAnimKey(k => k + 1);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchRoute();
+  }, [retryCount]);
 
-  const enriched = useMemo(() => enrichNodes(step.nodes), [step]);
-  const nodeMap  = useMemo(() => buildNodeMap(enriched), [enriched]);
-  const fNodes   = useMemo(() => enriched.filter(n => n.floor === dFloor), [enriched, dFloor]);
-  const pathD    = useMemo(() => buildPath(step.node_sequence, nodeMap, dFloor), [step.node_sequence, nodeMap, dFloor]);
-  const dims     = useMemo(() => imageDims(dFloor), [dFloor]);
+  /* ── 로딩 / 에러 화면 ── */
+  if (loading) {
+    return (
+      <div style={{
+        position: "fixed", inset: 0, display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "center", gap: 16,
+        background: "#fff", fontFamily: '-apple-system, "Noto Sans KR", sans-serif',
+      }}>
+        <div style={{
+          width: 48, height: 48, borderRadius: "50%",
+          border: "4px solid #e5e5e5", borderTopColor: "#111",
+          animation: "spin 0.8s linear infinite",
+        }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <p style={{ fontSize: 15, color: "#888", fontWeight: 600 }}>경로 계산 중...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{
+        position: "fixed", inset: 0, overflowY: "auto",
+        display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "flex-start",
+        background: "#fff", fontFamily: '-apple-system, "Noto Sans KR", sans-serif',
+        padding: "48px 24px 40px",
+      }}>
+        <p style={{ fontSize: 18, fontWeight: 800, color: "#111", marginBottom: 12 }}>경로를 불러오지 못했어요</p>
+        <pre style={{
+          width: "100%", maxWidth: 480,
+          background: "#f5f5f5", borderRadius: 12, padding: "14px 16px",
+          fontSize: 12, color: "#c00", fontFamily: "monospace",
+          wordBreak: "break-all", whiteSpace: "pre-wrap", marginBottom: 12,
+        }}>{error}</pre>
+        {rawResponse && (
+          <pre style={{
+            width: "100%", maxWidth: 480,
+            background: "#f9f9f9", borderRadius: 12, padding: "14px 16px",
+            fontSize: 11, color: "#555", fontFamily: "monospace",
+            wordBreak: "break-all", whiteSpace: "pre-wrap", marginBottom: 12,
+            maxHeight: 240, overflowY: "auto",
+          }}>{rawResponse}</pre>
+        )}
+        <button
+          onClick={() => setRetryCount(c => c + 1)}
+          style={{
+            marginTop: 8, padding: "12px 28px", borderRadius: 12, border: "none",
+            background: "#111", color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer",
+          }}
+        >
+          다시 시도
+        </button>
+      </div>
+    );
+  }
+
+  /* ── 데이터 파싱 ── */
+  if (!routeData) return null;
+  const bdata    = routeData[0];
+  const bldName: string   = bdata.건물명;
+  const steps: StepData[] = bdata.steps ?? [];
+  const mapped   = ALIAS[bldName] ?? bldName;
+
+  const safeIdx  = Math.min(stepIdx, steps.length - 1);
+  const step     = steps[safeIdx];
+  if (!step) return null;
+  const dFloor   = step.floor;
+  const floorImg = FLOOR_IMAGES[dFloor] ?? null;
+
+  const enriched = enrichNodes(step.nodes, mapped);
+  const nodeMap  = buildNodeMap(enriched);
+  const fNodes   = enriched.filter(n => n.floor === dFloor);
+  const pathD    = buildPath(step.node_sequence, nodeMap, dFloor);
+  const dims     = imageDims(dFloor, mapped);
 
   function go(dir: 1 | -1) {
-    const next = stepIdx + dir;
-    if (next >= 0 && next < STEPS.length) { setStepIdx(next); setAnimKey(k => k + 1); }
+    const next = safeIdx + dir;
+    if (next >= 0 && next < steps.length) { setStepIdx(next); setAnimKey(k => k + 1); }
+  }
+
+  function handleComplete() {
+    const groupId = localStorage.getItem("gwanzae-dispatch-group-id");
+    if (groupId) {
+      try {
+        const raw = localStorage.getItem("gwanzae-timegroups");
+        const groups = raw ? JSON.parse(raw) : [];
+        localStorage.setItem("gwanzae-timegroups", JSON.stringify(groups.filter((g: { id: string }) => g.id !== groupId)));
+      } catch { /* ignore */ }
+      localStorage.removeItem("gwanzae-dispatch-group-id");
+    }
+    router.push("/");
   }
 
   return (
@@ -444,8 +546,6 @@ export default function DispatchPage() {
       background: "#fff",
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif',
     }}>
-
-      {/* ── 지도 영역 ── */}
       {floorImg ? (
         <FloorMapReal
           animKey={animKey} fNodes={fNodes} pathD={pathD}
@@ -460,8 +560,8 @@ export default function DispatchPage() {
       )}
 
       <BottomPanel
-        step={step} stepIdx={stepIdx} total={STEPS.length}
-        onPrev={() => go(-1)} onNext={() => go(1)}
+        step={step} stepIdx={safeIdx} total={steps.length}
+        onPrev={() => go(-1)} onNext={step.is_last_step ? handleComplete : () => go(1)}
       />
     </div>
   );

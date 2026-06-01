@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Camera, Users, Clock, CheckCircle2, X, Loader2,
@@ -12,7 +13,7 @@ import {
   getCurrentStaffStatus, StaffStatus,
 } from "@/lib/utils";
 import { scanApplication } from "@/lib/gemini";
-import { fetchWorkers, optimizeRoute, updateProduct } from "@/lib/db";
+import { fetchWorkers, optimizeRoute, updateProduct, createProduct } from "@/lib/db";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
@@ -35,6 +36,7 @@ type ScanStep = "camera" | "scanning" | "review";
 type ScannedData = Omit<DispatchApplication, "id" | "status" | "createdAt" | "requiredPersonnel">;
 
 export default function Home() {
+  const router = useRouter();
   const [staff, setStaff] = useState<StaffStatus>({ count: 0, label: "로딩 중..." });
   const [time, setTime] = useState<Date>(new Date());
   const [mounted, setMounted] = useState(false);
@@ -133,12 +135,16 @@ export default function Home() {
       const serverMap: Record<string, number> = {};
       data.물품목록.forEach((item, i) => {
         const w = workerResults[i];
-        const stored =
-          typeof w === "number"
-            ? w
-            : typeof (w as Record<string, unknown>)?.필요인원수 === "number"
-              ? (w as Record<string, unknown>).필요인원수 as number
-              : null;
+        let stored: number | null = null;
+        if (typeof w === "number") {
+          stored = w;
+        } else if (w && typeof w === "object") {
+          const obj = w as Record<string, unknown>;
+          const val = obj["필요인원수"] ?? obj["workers"] ?? obj["count"] ?? obj["인원수"];
+          if (typeof val === "number") stored = val;
+          else if (typeof val === "string") stored = parseInt(val, 10) || null;
+        }
+        console.log(`[fetchWorkers] 품명=${item.품명}`, w, "→ stored:", stored);
         if (stored != null && stored > 0) serverMap[item.품명] = stored;
         inputs[i] = stored != null && stored > 0
           ? String(stored)
@@ -178,18 +184,27 @@ export default function Home() {
       createdAt: Date.now(),
     }]);
 
-    // 서버 값과 달라진 항목만 PATCH /products/{originalName}
+    // 서버 동기화: 품목이 DB에 있으면 PATCH, 없으면 POST
     updatedItems.forEach((item, i) => {
       const originalName = scannedData.물품목록[i].품명;
       const serverVal = serverPersonnel[originalName];
-      const nameChanged = item.품명 !== originalName;
-      const personnelChanged = serverVal !== undefined && serverVal !== item.필요인원수;
-      if (nameChanged || personnelChanged) {
-        const patch: { 품명?: string; 필요인원수?: number } = {};
-        if (nameChanged) patch.품명 = item.품명;
-        if (personnelChanged) patch.필요인원수 = item.필요인원수;
-        updateProduct(originalName, patch).catch(err =>
-          console.error(`[updateProduct ${originalName}]`, err)
+
+      if (serverVal !== undefined) {
+        // DB에 있는 품목 — 이름이나 인원수가 바뀐 경우만 PATCH
+        const nameChanged = item.품명 !== originalName;
+        const personnelChanged = serverVal !== item.필요인원수;
+        if (nameChanged || personnelChanged) {
+          const patch: { 품명?: string; 필요인원수?: number } = {};
+          if (nameChanged) patch.품명 = item.품명;
+          if (personnelChanged) patch.필요인원수 = item.필요인원수;
+          updateProduct(originalName, patch).catch(err =>
+            console.error(`[updateProduct ${originalName}]`, err)
+          );
+        }
+      } else if (item.필요인원수 > 0) {
+        // DB에 없는 신규 품목 — POST로 등록
+        createProduct({ 품명: item.품명, 필요인원수: item.필요인원수 }).catch(err =>
+          console.error(`[createProduct ${item.품명}]`, err)
         );
       }
     });
@@ -283,28 +298,20 @@ export default function Home() {
     return null;
   }
 
-  /** 출동 버튼 클릭 → 팝업 열고 API 호출 */
-  const handleDispatchClick = async (group: DispatchTimeGroup) => {
-    setDispatchPopup(group);
-    setRouteLoading(true);
-    setRouteData(null);
-    setRouteError(null);
-    try {
-      const result = await optimizeRoute({
-        투입인원수: staff.count > 0 ? staff.count : null,
-        신청서: group.applications.flatMap(a => a.물품목록.map(item => ({
-          품명: item.품명,
-          설치장소: item.설치장소,
-          수량: item.수량,
-          필요인원수: item.필요인원수,
-        }))),
-      });
-      setRouteData(result);
-    } catch (err) {
-      setRouteError(String(err));
-    } finally {
-      setRouteLoading(false);
-    }
+  /** 출동 버튼 클릭 → /dispatch로 이동 (요청 데이터를 localStorage에 저장) */
+  const handleDispatchClick = (group: DispatchTimeGroup) => {
+    const request = {
+      투입인원수: staff.count > 0 ? staff.count : null,
+      신청서: group.applications.flatMap(a => a.물품목록.map(item => ({
+        품명: item.품명,
+        설치장소: item.설치장소,
+        수량: item.수량,
+        필요인원수: item.필요인원수,
+      }))),
+    };
+    localStorage.setItem("gwanzae-dispatch-request", JSON.stringify(request));
+    localStorage.setItem("gwanzae-dispatch-group-id", group.id);
+    router.push("/dispatch");
   };
 
   /** 출동 확인 → optimizedRoute를 서버 결과로 갱신 후 isDispatched = true */
@@ -488,10 +495,13 @@ export default function Home() {
                           출동
                         </button>
                       ) : (
-                        <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-white/20 text-white">
-                          <Truck className="w-3.5 h-3.5" />
-                          출동 중
-                        </div>
+                        <button
+                          onClick={() => saveTimeGroups(timeGroups.map(g => g.id === group.id ? { ...g, isDispatched: false } : g))}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-white/20 text-white active:bg-white/30 transition-colors"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          취소
+                        </button>
                       )}
                       <button
                         onClick={() => completeGroup(group.id)}

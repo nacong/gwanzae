@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "https://dynamic-coaching-venues-nickel.trycloudflare.com";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "https://buf-boundaries-platform-europe.trycloudflare.com";
 
 type Result = { ok: boolean; status?: number; data?: unknown; error?: string };
 
