@@ -3,19 +3,14 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
+import { ArrowLeft, Phone, MoreVertical, Camera, X, ImageIcon, Upload, PartyPopper } from "lucide-react";
 import mappingRaw from "@/lib/mapping.json";
+import {
+  listApplications, completeApplication,
+  type RoutePickupItem, type RouteNode, type RouteStep, type RouteBuilding,
+} from "@/lib/api";
 
 /* ─── constants ──────────────────────────────────────────── */
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
-
-const DEFAULT_REQUEST = {
-  투입인원수: 2,
-  신청서: [
-    { 품명: "신호처리장치", 설치장소: "전정대 329", 수량: 1, 필요인원수: 2 },
-    { 품명: "TV Monitor",   설치장소: "전정대 566", 수량: 1, 필요인원수: 2 },
-  ],
-};
 
 /** 백엔드 건물명 약칭 → mapping.json 키 */
 const ALIAS: Record<string, string> = { "전정대": "전자정보대학" };
@@ -35,37 +30,14 @@ const FLOOR_COLOR: Record<string, string> = {
 
 const CSS_ANIM = `@keyframes dispatchDraw { to { stroke-dashoffset: 0; } }`;
 
-/* ─── types ──────────────────────────────────────────────── */
+/* ─── types (lib/api.ts의 동선 타입 재사용) ─────────────────── */
 
-interface PickupItem { 호수: string; 품명: string; 수량: number; }
-
-interface NodeData {
-  id: string; x: number; y: number; floor: string;
-  node_type: string; is_pickup: boolean; is_elevator: boolean;
-  is_stair: boolean; is_start: boolean; assigned_rooms: string[];
-  pickup_items: PickupItem[];
-}
+type PickupItem = RoutePickupItem;
+type NodeData = RouteNode;
+type StepData = RouteStep;
 
 interface EnrichedNode extends NodeData {
   px: number; py: number;
-}
-
-interface EdgeData {
-  order: number; from: string; to: string;
-  from_floor: string; to_floor: string;
-  edge_type: string; is_floor_transition: boolean;
-}
-
-interface StepData {
-  step_no: number; step_type: string; guide_text: string; floor: string;
-  node_sequence: string[]; nodes: NodeData[]; edges: EdgeData[];
-  trigger_node: string; is_last_step: boolean;
-}
-
-interface RouteBuilding {
-  건물명: string;
-  상태: string;
-  steps: StepData[];
 }
 
 type RouteResponse = RouteBuilding[];
@@ -352,43 +324,155 @@ function FloorMapSchematic({ animKey, fNodes, pathD, nodeSequence }: {
   );
 }
 
-/* ─── BottomPanel ────────────────────────────────────────── */
+/* ─── 상단 헤더 (네비 - 이동/수거 안내 공통) ───────────────── */
 
-function BottomPanel({ step, stepIdx, total, onPrev, onNext }: {
-  step: StepData; stepIdx: number; total: number;
-  onPrev: () => void; onNext: () => void;
+function NavHeader({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <div className="fixed inset-x-0 top-0 z-30 flex items-center justify-between bg-[#f2f4f7] px-5 pt-safe-top"
+      style={{ height: "calc(56px + env(safe-area-inset-top))" }}>
+      <button onClick={onBack} aria-label="뒤로" className="flex size-6 items-center justify-center">
+        <ArrowLeft size={24} className="text-[#111827]" />
+      </button>
+      <p className="text-lg font-bold text-[#111827]">{title}</p>
+      <div className="flex items-center gap-4 text-[#111827]">
+        <Phone size={20} />
+        <MoreVertical size={20} />
+      </div>
+    </div>
+  );
+}
+
+/* ─── 하단 안내/버튼 바 ─────────────────────────────────────── */
+
+function GuideBar({ guide, isLast, primaryLabel, primaryIcon, onPrev, onPrimary }: {
+  guide: string; isLast: boolean; primaryLabel: string;
+  primaryIcon?: React.ReactNode; onPrev: () => void; onPrimary: () => void;
 }) {
   return (
-    <div style={{
-      position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 100,
-      background: "white", borderRadius: "20px 20px 0 0",
-      padding: "14px 20px calc(20px + env(safe-area-inset-bottom))",
-      display: "flex", flexDirection: "column", gap: 10,
-    }}>
-      <div style={{ height: 3, background: "#eee", borderRadius: 99, overflow: "hidden" }}>
-        <div style={{
-          height: "100%", width: `${((stepIdx + 1) / total) * 100}%`,
-          background: "#111", borderRadius: 99, transition: "width 0.4s ease",
-        }} />
-      </div>
-      <span style={{ fontSize: 13, color: "#aaa", fontWeight: 600 }}>{stepIdx + 1} / {total}</span>
-      <div style={{ fontSize: 22, fontWeight: 800, lineHeight: 1.45, color: "#111" }}>
-        {step.guide_text}
-      </div>
-      <div style={{ display: "flex", gap: 10 }}>
-        <button onClick={onPrev} disabled={stepIdx === 0} style={{
-          flex: 1, padding: "14px 0", borderRadius: 14, border: "none",
-          background: stepIdx === 0 ? "#f2f2f2" : "#e5e5e5",
-          color: stepIdx === 0 ? "#ccc" : "#444",
-          fontWeight: 700, fontSize: 16, cursor: stepIdx === 0 ? "default" : "pointer",
-        }}>이전</button>
-        <button onClick={onNext} style={{
-          flex: 3, padding: "14px 0", borderRadius: 14, border: "none",
-          background: "#111", color: "white", fontWeight: 700, fontSize: 16, cursor: "pointer",
-        }}>
-          {step.is_last_step ? "✓ 수거 완료" : "다음 →"}
+    <div className="fixed inset-x-0 bottom-0 z-30 flex flex-col gap-4 bg-[#f2f4f7] px-5 pt-4 pb-safe-bottom">
+      <p className="text-2xl font-bold leading-snug text-[#111827]">{guide}</p>
+      <div className="flex items-stretch gap-3">
+        <button onClick={onPrev}
+          className="flex h-[52px] w-[100px] items-center justify-center rounded-xl border border-[#e5e7eb] bg-white text-base font-semibold text-[#111827]">
+          이전
+        </button>
+        <button onClick={onPrimary}
+          className="flex h-[52px] flex-1 items-center justify-center gap-2 rounded-xl bg-[#0043ff] text-base font-semibold text-white">
+          {primaryIcon}
+          {isLast ? "수거 완료" : primaryLabel}
         </button>
       </div>
+    </div>
+  );
+}
+
+/* ─── 수거 안내: 물품 테이블 ────────────────────────────────── */
+
+const COLLECT_COLS = ["순번", "품명", "수량", "설치장소"] as const;
+
+function CollectTable({ items }: { items: PickupItem[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <div className="inline-grid min-w-full gap-2"
+        style={{ gridTemplateColumns: "auto 1fr auto 1.6fr" }}>
+        {COLLECT_COLS.map((c) => (
+          <div key={c} className="flex items-center justify-center py-2.5 text-base font-semibold text-[#4b5563]">{c}</div>
+        ))}
+        {items.map((it, i) => (
+          <ItemRow key={i} idx={i + 1} item={it} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ItemRow({ idx, item }: { idx: number; item: PickupItem }) {
+  const cell = "flex items-center justify-center rounded-xl bg-white px-4 py-3 text-sm font-semibold text-[#475569]";
+  return (
+    <>
+      <div className={cell.replace("bg-white", "bg-[#d0ddef]")}>{idx}</div>
+      <div className={cell}>{item.품명}</div>
+      <div className={cell}>{item.수량}</div>
+      <div className={`${cell} text-center`}>{item.호수.endsWith("호") ? item.호수 : `${item.호수}호`}</div>
+    </>
+  );
+}
+
+/* ─── 사진 올리기 바텀시트 ─────────────────────────────────── */
+
+function PhotoUploadSheet({ room, onClose, onUpload }: {
+  room: string; onClose: () => void; onUpload: (file: File) => void;
+}) {
+  const [preview, setPreview] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  function pick(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (f) { setPreview(URL.createObjectURL(f)); onUpload(f); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative flex w-full flex-col gap-6 rounded-t-3xl bg-white px-6 pb-11 pt-3 shadow-[0_-4px_12px_rgba(0,0,0,0.1)]">
+        <div className="flex justify-center">
+          <span className="h-1 w-9 rounded-full bg-[#e5e7eb]" />
+        </div>
+        <div className="flex items-center justify-between">
+          <p className="text-xl font-bold text-[#111827]">사진 올리기</p>
+          <button onClick={onClose} aria-label="닫기"
+            className="flex size-8 items-center justify-center rounded-2xl bg-[#f2f4f7]">
+            <X size={20} className="text-[#111827]" />
+          </button>
+        </div>
+        <button onClick={() => fileRef.current?.click()}
+          className="flex h-[400px] w-full items-center justify-center overflow-hidden rounded-3xl border border-[#e5e7eb] bg-[#e5e7eb]">
+          {preview ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={preview} alt={`${room}호 수거 사진`} className="size-full object-cover" />
+          ) : (
+            <ImageIcon size={48} className="text-[#9ca3af]" />
+          )}
+        </button>
+        <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={pick} />
+        <button onClick={() => fileRef.current?.click()}
+          className="flex h-[52px] w-full items-center justify-center gap-2 rounded-xl bg-[#0043ff] text-base font-semibold text-white">
+          <Upload size={20} />
+          {preview ? "다시 촬영하기" : "사진 촬영하기"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── 전체 완료 화면 ────────────────────────────────────────── */
+
+function CompletionScreen({ count, elapsed, onHome }: {
+  count: number; elapsed: string; onHome: () => void;
+}) {
+  return (
+    <div className="font-pretendard fixed inset-0 flex flex-col items-center justify-center bg-[#f2f4f7] p-10">
+      <div className="flex w-full flex-col items-center gap-8">
+        <PartyPopper size={84} className="text-[#0043ff]" strokeWidth={1.6} />
+        <div className="flex w-full flex-col items-center gap-3 text-center">
+          <p className="text-[28px] font-extrabold text-[#0043ff]">수거 완료!</p>
+          <p className="text-lg font-medium text-[#4b5563]">수고하셨습니다~~</p>
+        </div>
+        <div className="flex w-full flex-col gap-4 rounded-[20px] bg-white p-5 text-sm">
+          <div className="flex items-center justify-between">
+            <p className="text-[#9ca3af]">완료된 작업</p>
+            <p className="font-bold text-black">{count}건</p>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-[#9ca3af]">총 소요시간</p>
+            <p className="font-bold text-black">{elapsed}</p>
+          </div>
+        </div>
+      </div>
+      <button onClick={onHome}
+        className="absolute inset-x-10 bottom-[calc(60px+env(safe-area-inset-bottom))] flex h-[53px] items-center justify-center rounded-xl bg-[#0043ff] text-lg font-semibold text-white">
+        홈으로
+      </button>
     </div>
   );
 }
@@ -405,6 +489,9 @@ export default function DispatchPage() {
 
   const [stepIdx,  setStepIdx]  = useState(0);
   const [animKey,  setAnimKey]  = useState(0);
+  const [photoOpen, setPhotoOpen] = useState(false);
+  const [done, setDone] = useState(false);
+  const startRef = useRef<number>(Date.now());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const transformRef = useRef<any>(null);
 
@@ -414,25 +501,19 @@ export default function DispatchPage() {
       setError(null);
       setRawResponse(null);
       try {
-        const saved = localStorage.getItem("gwanzae-dispatch-request");
-        const request = saved ? JSON.parse(saved) : DEFAULT_REQUEST;
-        const res = await fetch(`${API_BASE}/optimize/route`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request),
-        });
-        const text = await res.text();
-        console.log("[dispatch] status:", res.status, "body:", text);
-        if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+        const saved = localStorage.getItem("gwanzae-dispatch-route");
+        if (!saved) {
+          throw new Error("출동 경로 정보가 없습니다. 오늘 화면에서 출동을 눌러 다시 시작해주세요.");
+        }
         let data: RouteResponse;
         try {
-          data = JSON.parse(text);
+          data = JSON.parse(saved);
         } catch {
-          throw new Error(`JSON 파싱 실패: ${text.slice(0, 200)}`);
+          throw new Error(`저장된 경로 데이터를 읽지 못했습니다: ${saved.slice(0, 200)}`);
         }
         if (!Array.isArray(data) || data.length === 0) {
           setRawResponse(JSON.stringify(data, null, 2));
-          throw new Error("응답 배열이 비어있습니다.");
+          throw new Error("경로 데이터가 비어있습니다.");
         }
         setRouteData(data);
         setStepIdx(0);
@@ -491,13 +572,13 @@ export default function DispatchPage() {
           }}>{rawResponse}</pre>
         )}
         <button
-          onClick={() => setRetryCount(c => c + 1)}
+          onClick={() => (localStorage.getItem("gwanzae-dispatch-route") ? setRetryCount(c => c + 1) : router.push("/today"))}
           style={{
             marginTop: 8, padding: "12px 28px", borderRadius: 12, border: "none",
             background: "#111", color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer",
           }}
         >
-          다시 시도
+          {localStorage.getItem("gwanzae-dispatch-route") ? "다시 시도" : "오늘 화면으로"}
         </button>
       </div>
     );
@@ -522,12 +603,19 @@ export default function DispatchPage() {
   const pathD    = buildPath(step.node_sequence, nodeMap, dFloor);
   const dims     = imageDims(dFloor, mapped);
 
+  const isPickup = step.step_type === "pickup";
+  const triggerNode = enriched.find(n => n.id === step.trigger_node);
+  const pickupItems = triggerNode?.pickup_items ?? [];
+  const room = pickupItems[0]?.호수 ?? triggerNode?.assigned_rooms?.[0] ?? "";
+  const roomLabel = room && !room.endsWith("호") ? `${room}호` : room;
+  const headerTitle = roomLabel ? `${bldName} ${roomLabel}` : bldName;
+
   function go(dir: 1 | -1) {
     const next = safeIdx + dir;
-    if (next >= 0 && next < steps.length) { setStepIdx(next); setAnimKey(k => k + 1); }
+    if (next >= 0 && next < steps.length) { setStepIdx(next); setAnimKey(k => k + 1); setPhotoOpen(false); }
   }
 
-  function handleComplete() {
+  async function finish() {
     const groupId = localStorage.getItem("gwanzae-dispatch-group-id");
     if (groupId) {
       try {
@@ -537,32 +625,84 @@ export default function DispatchPage() {
       } catch { /* ignore */ }
       localStorage.removeItem("gwanzae-dispatch-group-id");
     }
-    router.push("/");
+
+    try {
+      const rawApps = localStorage.getItem("gwanzae-dispatch-apps");
+      const appNumbers: string[] = rawApps ? JSON.parse(rawApps) : [];
+      if (appNumbers.length > 0) {
+        const all = await listApplications();
+        const targets = all.filter(a => appNumbers.includes(a.신청번호));
+        await Promise.all(targets.map(a => completeApplication(a.id)));
+      }
+    } catch { /* 완료 처리 실패해도 완료 화면은 보여준다 */ }
+
+    localStorage.removeItem("gwanzae-dispatch-route");
+    localStorage.removeItem("gwanzae-dispatch-apps");
+    setDone(true);
+  }
+
+  function elapsedLabel() {
+    const mins = Math.max(1, Math.round((Date.now() - startRef.current) / 60000));
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return h > 0 ? `${h}시간 ${m}분` : `${m}분`;
+  }
+
+  if (done) {
+    const pickupCount = steps.filter(s => s.step_type === "pickup").length;
+    return (
+      <CompletionScreen count={pickupCount} elapsed={elapsedLabel()} onHome={() => router.push("/today")} />
+    );
+  }
+
+  function handlePrimary() {
+    if (step.is_last_step) { finish(); return; }
+    if (isPickup) { setPhotoOpen(true); return; }
+    go(1);
   }
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, overflow: "hidden",
-      background: "#fff",
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif',
-    }}>
-      {floorImg ? (
-        <FloorMapReal
-          animKey={animKey} fNodes={fNodes} pathD={pathD}
-          floorImg={floorImg} imageW={dims.w} imageH={dims.h}
-          nodeSequence={step.node_sequence} transformRef={transformRef}
-        />
+    <div className="font-pretendard fixed inset-0 overflow-hidden bg-[#f2f4f7]">
+      <NavHeader title={headerTitle} onBack={() => (safeIdx === 0 ? router.push("/today") : go(-1))} />
+
+      {isPickup ? (
+        <div className="absolute inset-x-0 overflow-y-auto px-5"
+          style={{ top: "calc(56px + env(safe-area-inset-top))", bottom: 160 }}>
+          <CollectTable items={pickupItems} />
+        </div>
       ) : (
-        <FloorMapSchematic
-          animKey={animKey} fNodes={fNodes} pathD={pathD} displayFloor={dFloor}
-          nodeSequence={step.node_sequence}
-        />
+        <div className="absolute inset-x-0"
+          style={{ top: "calc(56px + env(safe-area-inset-top))", bottom: 0 }}>
+          {floorImg ? (
+            <FloorMapReal
+              animKey={animKey} fNodes={fNodes} pathD={pathD}
+              floorImg={floorImg} imageW={dims.w} imageH={dims.h}
+              nodeSequence={step.node_sequence} transformRef={transformRef}
+            />
+          ) : (
+            <FloorMapSchematic
+              animKey={animKey} fNodes={fNodes} pathD={pathD} displayFloor={dFloor}
+              nodeSequence={step.node_sequence}
+            />
+          )}
+        </div>
       )}
 
-      <BottomPanel
-        step={step} stepIdx={safeIdx} total={steps.length}
-        onPrev={() => go(-1)} onNext={step.is_last_step ? handleComplete : () => go(1)}
+      <GuideBar
+        guide={step.guide_text}
+        isLast={step.is_last_step}
+        primaryLabel={isPickup ? "사진 촬영하기" : "다음"}
+        primaryIcon={isPickup ? <Camera size={20} /> : undefined}
+        onPrev={() => go(-1)}
+        onPrimary={handlePrimary}
       />
+
+      {photoOpen && (
+        <PhotoUploadSheet
+          room={room}
+          onClose={() => setPhotoOpen(false)}
+          onUpload={() => { setPhotoOpen(false); if (step.is_last_step) finish(); else go(1); }}
+        />
+      )}
     </div>
   );
 }
