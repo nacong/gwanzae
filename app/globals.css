@@ -43,6 +43,8 @@
    문서가 튕기면 fixed 바텀바가 함께 들리는 현상 방지 */
 html {
   overscroll-behavior: none;
+  /* 전체적인 글자 크기 축소: rem 기반 text-* 유틸이 이 값을 따라 줄어든다 */
+  font-size: 15px;
 }
 
 /* Safe-area insets for notched / home-indicator phones */

@@ -8,7 +8,7 @@ const CODE_LENGTH = 6;
 
 export default function LoginPage() {
   const router = useRouter();
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState("123456");
   const [submitting, setSubmitting] = useState(false);
 
   const ready = code.length === CODE_LENGTH && !submitting;

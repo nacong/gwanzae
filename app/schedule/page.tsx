@@ -620,7 +620,7 @@ export default function SchedulePage() {
           onClick={handleOptimize}
           disabled={optimizing}
           aria-label="최적화"
-          className="fixed bottom-[calc(104px+env(safe-area-inset-bottom))] left-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#475569] text-white shadow-lg disabled:opacity-60"
+          className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] left-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#475569] text-white shadow-lg disabled:opacity-60"
         >
           {optimizing ? (
             <span className="size-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
@@ -633,7 +633,7 @@ export default function SchedulePage() {
       <button
         onClick={() => setPendingFiles([])}
         aria-label="신청서 추가"
-        className="fixed bottom-[calc(104px+env(safe-area-inset-bottom))] right-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#0043ff] text-white shadow-lg"
+        className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] right-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#0043ff] text-white shadow-lg"
       >
         <Plus size={24} />
       </button>
