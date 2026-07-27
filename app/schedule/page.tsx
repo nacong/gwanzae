@@ -201,6 +201,7 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
   const [files, setFiles] = useState<File[]>(initialFiles);
   const [previews, setPreviews] = useState<string[]>(() => initialFiles.map((f) => URL.createObjectURL(f)));
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [appId, setAppId] = useState<number | null>(null);
   const [신청부서, set신청부서] = useState("");
@@ -249,12 +250,15 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
 
   function updateItemCount(idx: number, delta: number) {
     setItems((prev) => prev.map((it, i) =>
-      i === idx ? { ...it, 필요인원수: Math.max(1, (it.필요인원수 ?? 1) + delta) } : it
+      i === idx ? { ...it, 필요인원수: Math.max(0, (it.필요인원수 ?? 0) + delta) } : it
     ));
   }
 
+  // API가 필요인원수를 안 준 품목(0·null·undefined)이 남아 있으면 등록 불가
+  const hasMissingCount = items.some((it) => !((it.필요인원수 ?? 0) > 0));
+
   async function submit() {
-    if (appId == null) return;
+    if (appId == null || hasMissingCount) return;
     setStep("submitting");
     setError(null);
     try {
@@ -280,7 +284,7 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
         </div>
       )}
 
-      <div className="flex flex-1 flex-col gap-8 overflow-y-auto px-5 pb-4">
+      <div className="flex flex-1 flex-col gap-8 overflow-y-auto px-5 pb-4 pt-6">
         {step === "photo" && (
           <>
             <div className="flex flex-col gap-4">
@@ -308,8 +312,24 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
                 <Plus size={32} className="text-[#60a5fa]" />
               </button>
             </div>
+            <button
+              onClick={() => galleryInputRef.current?.click()}
+              className="-mt-4 self-center text-sm font-semibold text-[#94a3b8] underline underline-offset-2"
+            >
+              갤러리에서 선택
+            </button>
+            {/* 기본: 카메라 촬영 */}
             <input
               ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={handleFilesPicked}
+            />
+            {/* 부득이한 경우: 갤러리에서 선택 */}
+            <input
+              ref={galleryInputRef}
               type="file"
               accept="image/*"
               multiple
@@ -358,7 +378,7 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
                       −
                     </button>
                     <div className="flex h-9 w-11 items-center justify-center rounded-lg bg-[#f1f5f9] text-xl font-bold text-[#475569]">
-                      {it.필요인원수 ?? 1}
+                      {(it.필요인원수 ?? 0) > 0 ? it.필요인원수 : ""}
                     </div>
                     <button
                       onClick={() => updateItemCount(i, 1)}
@@ -406,9 +426,10 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
         {step === "items" && (
           <button
             onClick={submit}
-            className="flex h-[53px] w-full items-center justify-center rounded-xl bg-[#0043ff] text-lg font-semibold text-white"
+            disabled={hasMissingCount}
+            className="flex h-[53px] w-full items-center justify-center rounded-xl bg-[#0043ff] text-lg font-semibold text-white disabled:bg-[#d0ddef] disabled:text-[#6b7fa0]"
           >
-            확인 완료
+            {hasMissingCount ? "필요인원을 입력해주세요" : "확인 완료"}
           </button>
         )}
         {step === "submitting" && (
@@ -429,15 +450,6 @@ export default function SchedulePage() {
   const [includeCompleted, setIncludeCompleted] = useState(true);
   const [optimizing, setOptimizing] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
-  const addInputRef = useRef<HTMLInputElement>(null);
-
-  function handleAddFilesPicked(e: React.ChangeEvent<HTMLInputElement>) {
-    const picked = Array.from(e.target.files ?? []);
-    e.target.value = "";
-    if (picked.length === 0) return;
-    setPendingFiles(picked);
-  }
-
   async function load() {
     setLoading(true);
     setError(null);
@@ -482,7 +494,7 @@ export default function SchedulePage() {
 
   return (
     <div className="font-pretendard flex min-h-dvh flex-col bg-[#f2f4f7] pb-[calc(80px+env(safe-area-inset-bottom))]">
-      <header className="flex h-20 items-center justify-between px-5 pt-safe-top">
+      <header className="mt-6 flex h-20 items-center justify-between px-5 pt-safe-top">
         <h1 className="text-2xl font-extrabold text-[#111827]">신청서</h1>
         <div className="flex items-center rounded-full bg-white p-0.5">
           {(["신청일순", "출동일순"] as SortKey[]).map((k) => (
@@ -499,7 +511,7 @@ export default function SchedulePage() {
         </div>
       </header>
 
-      <div className="flex flex-col gap-3 p-4">
+      <div className="flex flex-col gap-3 px-4 pb-4">
         <button
           onClick={() => setIncludeCompleted((v) => !v)}
           className="flex items-center gap-1.5 self-start"
@@ -542,16 +554,8 @@ export default function SchedulePage() {
         )}
       </button>
 
-      <input
-        ref={addInputRef}
-        type="file"
-        accept="image/*"
-        multiple
-        className="hidden"
-        onChange={handleAddFilesPicked}
-      />
       <button
-        onClick={() => addInputRef.current?.click()}
+        onClick={() => setPendingFiles([])}
         aria-label="신청서 추가"
         className="fixed bottom-[calc(104px+env(safe-area-inset-bottom))] right-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#0043ff] text-white shadow-lg"
       >

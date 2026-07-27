@@ -39,6 +39,12 @@
   }
 }
 
+/* 오버스크롤(고무줄) 방지는 실제 스크롤 주체인 html에 걸어야 동작한다.
+   문서가 튕기면 fixed 바텀바가 함께 들리는 현상 방지 */
+html {
+  overscroll-behavior: none;
+}
+
 /* Safe-area insets for notched / home-indicator phones */
 .pt-safe-top    { padding-top:    env(safe-area-inset-top,    0px); }
 .pb-safe-bottom { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
@@ -71,9 +77,13 @@
   animation: scan-line 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 
+/* 한 사이클(1.8s) 안에 아래로 갔다가 위로 돌아와야 이미지 전환(SCAN_MS) 시
+   애니메이션 리셋과 어긋나지 않는다 */
 @keyframes scan-line {
   0%   { top: 0%;   opacity: 0; }
-  10%  { opacity: 1; }
-  90%  { opacity: 1; }
-  100% { top: 100%; opacity: 0; }
+  5%   { opacity: 1; }
+  50%  { top: 100%; }
+  95%  { opacity: 1; }
+  100% { top: 0%;   opacity: 0; }
 }
+
