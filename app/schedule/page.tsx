@@ -353,8 +353,7 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
         {step === "photo" && (
           <>
             <div className="flex flex-col gap-4">
-              <h2 className="text-[28px] font-bold leading-tight text-[#1e293b]">신청서를 촬영해주세요</h2>
-              <p className="text-lg font-bold text-[#1e293b]">한 신청번호에 대한 사진들만 올려주세요</p>
+              <h2 className="text-[28px] font-bold leading-tight text-[#1e293b]">한 신청번호에 대한 사진들만 올려주세요</h2>
             </div>
             <div className="grid grid-cols-2 gap-3">
               {previews.map((src, i) => (

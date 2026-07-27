@@ -257,7 +257,7 @@ export default function TodayPage() {
                   <div key={slot.key} className="h-full w-full shrink-0 snap-center">
                     <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border-2 border-[#003dea] bg-white">
                       <div className="flex flex-col gap-1 border-b border-[#e2e8f0] px-5 py-4">
-                        <p className="text-[22px] font-bold text-[#1e293b]">{title}</p>
+                        <p className="text-[18px] font-bold text-[#1e293b]">{title}</p>
                         <p className="text-base text-[#475569]">{range}</p>
                       </div>
                       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pt-4 pb-2">

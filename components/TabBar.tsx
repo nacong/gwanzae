@@ -12,7 +12,7 @@ const TABS = [
 export default function TabBar() {
   const pathname = usePathname();
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 bg-white pb-safe-bottom">
+    <nav className="fixed inset-x-0 bottom-0 z-40 bg-white pb-[calc(env(safe-area-inset-bottom,0px)+6px)]">
       <div className="flex h-16 items-center">
         {TABS.map(({ href, label, Icon }) => {
           const active = pathname === href || pathname.startsWith(href + "/");
