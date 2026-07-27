@@ -242,26 +242,52 @@ export async function updateSchedule(scheduleId: number, patch: SchedulePatch): 
 
 /* ─── 실내 수거 동선 (Navigation) ────────────────────────────────
    GET /schedules/{id}/navigation — 한 일정의 실내 수거 동선을
-   층별 평면도 위 '픽셀 좌표'로 반환한다(서버가 미리 렌더 계산).
-   - floors[].image_url : "/route_buildings/..." (assetUrl 로 절대화)
-   - floors[].points    : 방문 순서대로의 노드 (픽셀 x/y, 수거/시작 여부)
-   - floors[].path      : 같은 층 노드들을 이은 폴리라인 [[x, y], ...]
-   동선 미계산·데이터 누락 시 상태(예: "동선없음")로 사유를 알린다.
+   '스텝 단위'로 반환한다(스텝당 층 이미지 1장). 각 스텝 = 하단 패널 한 장:
+   - guide_text / type_label / floor_label : 서버가 완성한 표시 문자열
+   - floor.image_url  : "/route_buildings/..." (assetUrl 로 절대화, 정적 제공)
+   - floor.path       : 도면 픽셀 좌표 점 배열 [{x, y}, ...] (그리는 순서)
+   - floor.nodes      : 찍을 노드 (픽셀 x/y, role/kind/label/pickup_items)
+   - floor.route_bbox : 오토센터링용 bbox
+   floor_mapping 이 없는 건물/층은 floor=null(텍스트 스텝)로 내려온다.
 
-   ⚠️ 응답 스키마가 openapi 에 typed 로 명세돼 있지 않고(schema: {}),
-   현재 데모 데이터셋엔 도면이 있는 건물이 없어 populated 응답을 직접
-   확인하지 못했다. points/floor 의 정확한 키 표기는 아래 normalize 로
-   (한글·영문 변형 모두) 흡수하며, 실제 도면 건물 확인 시 조정하면 된다. */
+   ⚠️ 응답 스키마가 openapi 에 typed 로 명세돼 있지 않아(schema: {}),
+   세부 키는 아래 소비부(app/dispatch)에서 (한글·영문 변형 모두) 흡수한다. */
 
-export type NavPoint = {
+export type NavPickupItem = {
+  호수?: string;
+  품명?: string;
+  수량?: number;
+} & Record<string, unknown>;
+
+export type NavNode = {
   x: number;
   y: number;
+  role?: string;                 // 예: start / pickup / waypoint
+  kind?: string;                 // 예: room / elevator / stair
+  label?: string;                // 호수·명칭 등 표시 문자열
+  pickup_items?: NavPickupItem[];
 } & Record<string, unknown>;
+
+// route_bbox — 서버가 {x,y,width,height} 또는 [x0,y0,x1,y1] 로 줄 수 있어 둘 다 흡수
+export type NavBBox = ({
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+} & Record<string, unknown>) | number[];
 
 export type NavFloor = {
   image_url?: string | null;
-  points?: NavPoint[];
-  path?: [number, number][];
+  path?: { x: number; y: number }[];
+  nodes?: NavNode[];
+  route_bbox?: NavBBox | null;
+} & Record<string, unknown>;
+
+export type NavStep = {
+  guide_text?: string;      // 완성된 안내 문자열
+  type_label?: string;      // 이동 / 수거 등
+  floor_label?: string;     // 완성된 층 문자열
+  floor?: NavFloor | null;  // floor_mapping 없으면 null (텍스트 스텝)
 } & Record<string, unknown>;
 
 export type NavigationResponse = {
@@ -269,7 +295,7 @@ export type NavigationResponse = {
   상태: string;
   detail?: string;
   건물명?: string;
-  floors: NavFloor[];
+  steps: NavStep[];
 } & Record<string, unknown>;
 
 export async function scheduleNavigation(scheduleId: number): Promise<NavigationResponse> {

@@ -541,13 +541,6 @@ export default function SchedulePage() {
     return list;
   }, [apps, includeCompleted, sort]);
 
-  // 최적화 대상: 점검완료됐지만 아직 출동일시가 안 잡힌(미처리) 신청서.
-  // 하나도 없으면 이미 최적화된 상태이므로 최적화 버튼을 숨긴다.
-  const hasOptimizable = useMemo(
-    () => apps.some((a) => a.점검완료 && !a.출동일시 && !isCompleted(a)),
-    [apps],
-  );
-
   async function handleOptimize() {
     setOptimizing(true);
     setError(null);
@@ -615,20 +608,18 @@ export default function SchedulePage() {
         ))}
       </div>
 
-      {hasOptimizable && (
-        <button
-          onClick={handleOptimize}
-          disabled={optimizing}
-          aria-label="최적화"
-          className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] left-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#475569] text-white shadow-lg disabled:opacity-60"
-        >
-          {optimizing ? (
-            <span className="size-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-          ) : (
-            <Sparkles size={22} />
-          )}
-        </button>
-      )}
+      <button
+        onClick={handleOptimize}
+        disabled={optimizing}
+        aria-label="최적화"
+        className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] left-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#475569] text-white shadow-lg disabled:opacity-60"
+      >
+        {optimizing ? (
+          <span className="size-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+        ) : (
+          <Sparkles size={22} />
+        )}
+      </button>
 
       <button
         onClick={() => setPendingFiles([])}

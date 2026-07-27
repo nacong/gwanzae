@@ -9,6 +9,10 @@ import {
   type NavFloor, type NavigationResponse,
 } from "@/lib/api";
 
+/* 이 화면의 navigation 소비는 스텝 단위 응답을 전제로 한다:
+   nav.steps[] = 각 패널(이동/수거). guide_text·floor_label 는 서버가 완성해 준다.
+   floor.path 는 {x,y} 객체 배열, floor.nodes 는 role/kind/label/pickup_items 를 갖는다. */
+
 /* ─── 데이터 모델 ─────────────────────────────────────────────
    /today 에서 넘겨준 출동 계획(정류장/신청서 카드 + 대표 일정 id)을 읽어,
    1) '작업 목록' 오버뷰(전체 경로)를 먼저 보여주고,
@@ -49,21 +53,51 @@ function toStr(v: unknown): string {
 
 interface NavPt { x: number; y: number; pickup: boolean; start: boolean; room: string; }
 
-function navPoints(floor: NavFloor): NavPt[] {
-  const arr = Array.isArray(floor.points) ? floor.points : [];
-  return arr.map((p) => ({
-    x: toNum(pick(p, ["x", "px", "cx", "좌표x"])) ?? 0,
-    y: toNum(pick(p, ["y", "py", "cy", "좌표y"])) ?? 0,
-    pickup: toBool(pick(p, ["수거", "수거여부", "is_pickup", "pickup", "isPickup"])),
-    start: toBool(pick(p, ["시작", "시작여부", "is_start", "start", "isStart"])),
-    room: toStr(pick(p, ["호수", "room", "설치장소", "label", "name", "방"])),
-  }));
+/** floor.nodes(신규) 를 렌더용 점으로 정규화. role/kind 또는 pickup_items 로 수거/시작을 판별.
+ *  (구버전 floor.points 도 함께 흡수해 하위호환) */
+function navPoints(floor: NavFloor | null): NavPt[] {
+  if (!floor) return [];
+  const arr = Array.isArray(floor.nodes)
+    ? floor.nodes
+    : Array.isArray((floor as Record<string, unknown>).points)
+      ? ((floor as Record<string, unknown>).points as unknown[])
+      : [];
+  return arr.map((p) => {
+    const role = toStr(pick(p, ["role", "역할"])).toLowerCase();
+    const kind = toStr(pick(p, ["kind", "node_type", "종류", "type"])).toLowerCase();
+    const items = pick(p, ["pickup_items", "items", "물품목록"]);
+    const hasItems = Array.isArray(items) && items.length > 0;
+    return {
+      x: toNum(pick(p, ["x", "px", "cx", "좌표x"])) ?? 0,
+      y: toNum(pick(p, ["y", "py", "cy", "좌표y"])) ?? 0,
+      pickup: hasItems || /pickup|수거|픽업/.test(role) || /pickup|수거/.test(kind)
+        || toBool(pick(p, ["수거", "수거여부", "is_pickup", "pickup", "isPickup"])),
+      start: /start|시작|출발/.test(role) || /start|시작/.test(kind)
+        || toBool(pick(p, ["시작", "시작여부", "is_start", "start", "isStart"])),
+      room: toStr(pick(p, ["label", "호수", "room", "설치장소", "name", "방"])),
+    };
+  });
 }
 
-function floorLabelOf(floor: NavFloor, idx: number): string {
-  const raw = toStr(pick(floor, ["floor", "층", "name", "label", "floor_name"]));
-  if (!raw) return `${idx + 1}층`;
-  return raw.replace(/(\d+)\s*F/i, "$1층");
+/** route_bbox({x,y,width,height} 또는 [x0,y0,x1,y1]) 를 min/max 로 정규화 */
+function routeBBoxOf(floor: NavFloor | null): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  const bb = floor?.route_bbox;
+  if (!bb) return null;
+  if (Array.isArray(bb)) {
+    if (bb.length < 4) return null;
+    const [a, b2, c, d] = bb.map(Number);
+    if (![a, b2, c, d].every((n) => isFinite(n))) return null;
+    return { minX: Math.min(a, c), minY: Math.min(b2, d), maxX: Math.max(a, c), maxY: Math.max(b2, d) };
+  }
+  const x = toNum(pick(bb, ["x", "minX", "x0", "left", "좌"]));
+  const y = toNum(pick(bb, ["y", "minY", "y0", "top", "상"]));
+  const w = toNum(pick(bb, ["width", "w", "너비"]));
+  const h = toNum(pick(bb, ["height", "h", "높이"]));
+  const mx = toNum(pick(bb, ["maxX", "x1", "right", "우"]));
+  const my = toNum(pick(bb, ["maxY", "y1", "bottom", "하"]));
+  if (x != null && y != null && w != null && h != null) return { minX: x, minY: y, maxX: x + w, maxY: y + h };
+  if (x != null && y != null && mx != null && my != null) return { minX: Math.min(x, mx), minY: Math.min(y, my), maxX: Math.max(x, mx), maxY: Math.max(y, my) };
+  return null;
 }
 
 /* ─── 경로 후처리 (폴리라인 단순화 + 라운드) ─────────────────── */
@@ -109,16 +143,18 @@ function makeRoundedPath(pts: Pt[], radius = 16): string {
   return d.join(" ");
 }
 
-/** floor.path([[x,y]...]) 우선, 없으면 points 순서로 폴리라인 생성 */
-function buildFloorPath(floor: NavFloor): string {
+/** floor.path([{x,y}...]) 우선, 없으면 nodes 순서로 폴리라인 생성.
+ *  구버전 [[x,y],...] 튜플 배열도 함께 흡수한다. */
+function buildFloorPath(floor: NavFloor | null): string {
+  if (!floor) return "";
   const raw: Pt[] = [];
   const path = floor.path;
   if (Array.isArray(path) && path.length) {
-    for (const seg of path) {
-      if (Array.isArray(seg) && seg.length >= 2) {
-        const x = toNum(seg[0]), y = toNum(seg[1]);
-        if (x != null && y != null) raw.push({ x, y });
-      }
+    for (const seg of path as unknown[]) {
+      let x: number | undefined, y: number | undefined;
+      if (Array.isArray(seg)) { x = toNum(seg[0]); y = toNum(seg[1]); }
+      else { x = toNum(pick(seg, ["x", "px", "cx"])); y = toNum(pick(seg, ["y", "py", "cy"])); }
+      if (x != null && y != null) raw.push({ x, y });
     }
   } else {
     for (const p of navPoints(floor)) raw.push({ x: p.x, y: p.y });
@@ -127,7 +163,9 @@ function buildFloorPath(floor: NavFloor): string {
   return makeRoundedPath(simplifyRoute(raw, 6), 16);
 }
 
-function viewBoxFor(pts: NavPt[], pad = 120): string {
+function viewBoxFor(floor: NavFloor | null, pts: NavPt[], pad = 120): string {
+  const bb = routeBBoxOf(floor);
+  if (bb) return `${bb.minX - pad} ${bb.minY - pad} ${bb.maxX - bb.minX + pad * 2} ${bb.maxY - bb.minY + pad * 2}`;
   if (!pts.length) return "0 0 1448 1086";
   const xs = pts.map((n) => n.x), ys = pts.map((n) => n.y);
   const x1 = Math.min(...xs) - pad, y1 = Math.min(...ys) - pad;
@@ -241,9 +279,17 @@ function FloorMapServer({ animKey, floor, activeRoom, transformRef }: {
   const src = assetUrl(floor.image_url);
   const pts = useMemo(() => navPoints(floor), [floor]);
   const pathD = useMemo(() => buildFloorPath(floor), [floor]);
+  // 오토센터링 영역: 서버 route_bbox 우선, 없으면 노드들의 min/max
+  const bounds = useMemo(() => {
+    const bb = routeBBoxOf(floor);
+    if (bb) return bb;
+    if (!pts.length) return null;
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
+  }, [floor, pts]);
 
   useEffect(() => {
-    if (!dim || !pts.length) return;
+    if (!dim || !bounds) return;
     let tries = 0;
     const run = () => {
       const api = transformRef.current, el = containerRef.current;
@@ -260,20 +306,18 @@ function FloorMapServer({ animKey, floor, activeRoom, transformRef }: {
       const avH = Math.max(cH - 200, cH * 0.5); // 하단 안내바 영역 제외
       const imgOffX = (cW - iW) / 2, imgOffY = (cH - iH) / 2;
       const sx = iW / dim.w, sy = iH / dim.h;
-      const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
-      const minX = Math.min(...xs), maxX = Math.max(...xs);
-      const minY = Math.min(...ys), maxY = Math.max(...ys);
+      const { minX, minY, maxX, maxY } = bounds;
       const cx = imgOffX + ((minX + maxX) / 2) * sx;
       const cy = imgOffY + ((minY + maxY) / 2) * sy;
       const pxW = Math.max((maxX - minX) * sx, 1);
       const pxH = Math.max((maxY - minY) * sy, 1);
-      let zoom = Math.min((cW * 0.85) / pxW, (avH * 0.85) / pxH, 5);
-      if (!isFinite(zoom) || zoom <= 0) zoom = 1.5;
+      let zoom = Math.min((cW * 0.72) / pxW, (avH * 0.72) / pxH, 2.2);
+      if (!isFinite(zoom) || zoom <= 0) zoom = 1.3;
       zoom = Math.max(zoom, 1); // 최소 1배 — 도면이 축소돼 작게 보이지 않도록
       api.setTransform(cW / 2 - cx * zoom, avH / 2 - cy * zoom, zoom, 250);
     };
     requestAnimationFrame(run);
-  }, [animKey, dim, pts]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [animKey, dim, bounds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 도면 이미지가 없거나 로드 실패 시 좌표만으로 그리는 스키매틱으로 대체
   if (imgError) return <FloorMapSchematic animKey={animKey} floor={floor} activeRoom={activeRoom} />;
@@ -315,11 +359,11 @@ function FloorMapServer({ animKey, floor, activeRoom, transformRef }: {
 /* ─── FloorMapSchematic — 도면 이미지 없을 때 좌표만으로 표시 ── */
 
 function FloorMapSchematic({ animKey, floor, activeRoom }: {
-  animKey: number; floor: NavFloor; activeRoom?: string;
+  animKey: number; floor: NavFloor | null; activeRoom?: string;
 }) {
   const pts = useMemo(() => navPoints(floor), [floor]);
   const pathD = useMemo(() => buildFloorPath(floor), [floor]);
-  const vBox = useMemo(() => viewBoxFor(pts), [pts]);
+  const vBox = useMemo(() => viewBoxFor(floor, pts), [floor, pts]);
 
   return (
     <div style={{ position: "absolute", inset: 0, background: "#fff" }}>
@@ -454,9 +498,9 @@ function PhotoUploadSheet({ room, onClose, onDone }: {
             <Upload size={20} />
             {preview ? "다시 촬영하기" : "사진 촬영하기"}
           </button>
-          <button onClick={onDone} disabled={!preview}
-            className="flex h-[52px] w-full items-center justify-center gap-2 rounded-xl bg-[#0043ff] text-base font-semibold text-white disabled:bg-[#d0ddef] disabled:text-[#6b7fa0]">
-            다음
+          <button onClick={onDone}
+            className="flex h-[52px] w-full items-center justify-center gap-2 rounded-xl bg-[#0043ff] text-base font-semibold text-white">
+            {preview ? "다음" : "사진 없이 넘어가기"}
           </button>
         </div>
       </div>
@@ -616,9 +660,10 @@ function OverviewScreen({ plan, onBack, onStart, onSkip }: {
 
 /* ─── walk-through 스텝 파생 ──────────────────────────────── */
 
+// guide: 서버가 완성해 준 안내 문구(guide_text). 비면 소비부에서 폴백 문구를 만든다.
 type WalkStep =
-  | { kind: "move"; 건물명: string; floorLabel: string; floor: NavFloor; activeRoom?: undefined }
-  | { kind: "pickup"; 건물명: string; floorLabel: string; floor: NavFloor | null; room: string; items: DispatchItem[] };
+  | { kind: "move"; 건물명: string; floorLabel: string; guide: string; floor: NavFloor | null; activeRoom?: undefined }
+  | { kind: "pickup"; 건물명: string; floorLabel: string; guide: string; floor: NavFloor | null; room: string; items: DispatchItem[] };
 
 function roomKey(s: string): string {
   const m = s.match(/([A-Za-z]?\s?[Bb]?\d+\s*호)/);
@@ -631,26 +676,51 @@ function itemsForRoom(items: DispatchItem[], room: string): DispatchItem[] {
   return hit.length ? hit : items;
 }
 
-/** 건물별 navigation 을 [이동→수거] 스텝으로 펼친다.
- *  도면·좌표가 없는 건물은 건물 단위 수거 스텝 하나로 대체(수거·사진은 계속 가능). */
+// type_label 로 '수거' 스텝 여부 판별
+function isPickupType(label: unknown): boolean {
+  return /수거|픽업|pickup|collect/i.test(toStr(label));
+}
+// 수거 스텝의 대표 호수: 서버 노드의 pickup label 우선
+function pickupRoomOf(floor: NavFloor | null): string {
+  const hit = navPoints(floor).find((p) => p.pickup && p.room);
+  return hit?.room ?? "";
+}
+
+/** 건물별 navigation(steps) 을 [이동→수거] walk-through 스텝으로 펼친다.
+ *  - 서버가 이미 이동/수거 스텝을 나눠 주므로 그대로 흡수하고 guide_text 를 실어 나른다.
+ *  - 서버가 수거 스텝을 따로 주지 않으면 이동 스텝의 수거 노드로 수거 스텝을 합성한다.
+ *  - 동선(스텝)이 아예 없으면 건물 단위 수거 스텝 하나로 대체(수거·사진은 계속 가능). */
 function buildWalk(buildings: DispatchBuilding[], navs: Record<number, NavigationResponse | "error" | undefined>): WalkStep[] {
   const out: WalkStep[] = [];
   for (const b of buildings) {
     const nav = navs[b.scheduleId];
-    const floors = nav && nav !== "error" && Array.isArray(nav.floors) ? nav.floors : [];
-    const usable = floors.filter((f) => (Array.isArray(f.points) && f.points.length > 0) || f.image_url);
+    const steps = nav && nav !== "error" && Array.isArray(nav.steps) ? nav.steps : [];
+    const hasServerPickup = steps.some((s) => isPickupType(s.type_label));
     let pickupAdded = false;
-    usable.forEach((floor, fi) => {
-      const fl = floorLabelOf(floor, fi);
-      out.push({ kind: "move", 건물명: b.건물명, floorLabel: fl, floor });
-      navPoints(floor).filter((p) => p.pickup).forEach((p) => {
-        out.push({ kind: "pickup", 건물명: b.건물명, floorLabel: fl, floor, room: p.room, items: itemsForRoom(b.items, p.room) });
+
+    for (const s of steps) {
+      const floor = s.floor ?? null;
+      const floorLabel = toStr(s.floor_label);
+      const guide = toStr(s.guide_text);
+      if (isPickupType(s.type_label)) {
+        const room = pickupRoomOf(floor);
+        out.push({ kind: "pickup", 건물명: b.건물명, floorLabel, guide, floor, room, items: itemsForRoom(b.items, room) });
         pickupAdded = true;
-      });
-    });
+      } else {
+        out.push({ kind: "move", 건물명: b.건물명, floorLabel, guide, floor });
+        // 서버가 수거 스텝을 안 줄 때만 이동 스텝의 수거 노드로 수거 스텝을 만든다(중복 방지)
+        if (!hasServerPickup) {
+          navPoints(floor).filter((p) => p.pickup).forEach((p) => {
+            out.push({ kind: "pickup", 건물명: b.건물명, floorLabel, guide: "", floor, room: p.room, items: itemsForRoom(b.items, p.room) });
+            pickupAdded = true;
+          });
+        }
+      }
+    }
+
     if (!pickupAdded) {
       // 동선 없음(또는 수거 포인트 미표기) → 건물 단위 수거 스텝
-      out.push({ kind: "pickup", 건물명: b.건물명, floorLabel: "", floor: null, room: "", items: b.items });
+      out.push({ kind: "pickup", 건물명: b.건물명, floorLabel: "", guide: "", floor: null, room: "", items: b.items });
     }
   }
   return out;
@@ -701,7 +771,7 @@ export default function DispatchPage() {
         for (const [id, r] of results) map[id] = r;
         console.log("[dispatch] navigation 결과:", list.map((b) => {
           const r = map[b.scheduleId];
-          return { 건물명: b.건물명, scheduleId: b.scheduleId, 상태: r === "error" ? "error" : r?.상태, floors: r === "error" ? 0 : r?.floors?.length ?? 0 };
+          return { 건물명: b.건물명, scheduleId: b.scheduleId, 상태: r === "error" ? "error" : r?.상태, steps: r === "error" ? 0 : r?.steps?.length ?? 0 };
         }));
         setNavs(map);
         setStepIdx(0);
@@ -772,15 +842,16 @@ export default function DispatchPage() {
   const roomLabel = isPickup && step.room ? (step.room.endsWith("호") ? step.room : `${step.room}호`) : "";
   const headerTitle = roomLabel ? `${step.건물명} ${roomLabel}` : step.건물명;
 
-  // 이동(move) 스텝: 도착 목표(그 층의 수거 호수)를 뽑아 방향 지시문을 만든다.
+  // 안내 문구: 서버 guide_text 를 우선 쓰고, 없을 때만 클라이언트에서 폴백 문구를 만든다.
   const moveRooms = !isPickup
     ? navPoints(step.floor).filter((p) => p.pickup && p.room).map((p) => (p.room.endsWith("호") ? p.room : `${p.room}호`))
     : [];
-  const guideText = isPickup
+  const fallbackGuide = isPickup
     ? (roomLabel ? `${roomLabel}에서 물품을 수거하세요` : `${step.건물명}에서 물품을 수거하세요`)
     : moveRooms.length
       ? `${step.floorLabel} ${moveRooms.join("·")}(으)로 이동하세요`
-      : `${step.건물명} ${step.floorLabel}(으)로 이동하세요`;
+      : `${step.건물명}${step.floorLabel ? ` ${step.floorLabel}` : ""}(으)로 이동하세요`;
+  const guideText = step.guide || fallbackGuide;
 
   function go(dir: 1 | -1) {
     const next = safeIdx + dir;
@@ -835,7 +906,7 @@ export default function DispatchPage() {
       ) : (
         <div className="absolute inset-x-0"
           style={{ top: "calc(56px + env(safe-area-inset-top))", bottom: 0 }}>
-          {step.floor.image_url ? (
+          {step.floor?.image_url ? (
             <FloorMapServer animKey={animKey} floor={step.floor} transformRef={transformRef} />
           ) : (
             <FloorMapSchematic animKey={animKey} floor={step.floor} />
