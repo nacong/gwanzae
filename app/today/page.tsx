@@ -86,7 +86,7 @@ function groupSchedules(rows: Schedule[], dateByApp: Map<string, string>): Slot[
       }));
       stops.push({ 건물명, cards, kind: "building", scheduleId: bRows[0]?.id, items });
     }
-    const routeStops = [warehouseStop(`${WAREHOUSE_NAME} (출발)`), ...stops, warehouseStop(`${WAREHOUSE_NAME} (도착)`)];
+    const routeStops = [warehouseStop(`${WAREHOUSE_NAME} 출발`), ...stops, warehouseStop(`${WAREHOUSE_NAME} 도착`)];
     const appNumbers = [...new Set(slotRows.map((r) => r.신청번호).filter((n): n is string => !!n))];
     slots.push({ key: 출동일시, 출동일시, stops: routeStops, appNumbers });
   }

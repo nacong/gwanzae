@@ -54,9 +54,13 @@ function StatusSection({ app }: { app: Application }) {
   );
 }
 
-function OverviewCard({ app }: { app: Application }) {
+function OverviewCard({ app, onClick }: { app: Application; onClick?: () => void }) {
   return (
-    <div className="flex w-full flex-col overflow-hidden rounded-xl bg-white">
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full flex-col overflow-hidden rounded-xl bg-white text-left transition-transform active:scale-[0.99]"
+    >
       <div className="flex flex-col gap-3.5 px-[18px] py-4">
         <div className="flex items-start justify-between text-[#1e293b]">
           <p className="text-sm">{app.신청번호}</p>
@@ -68,6 +72,67 @@ function OverviewCard({ app }: { app: Application }) {
         </div>
       </div>
       <StatusSection app={app} />
+    </button>
+  );
+}
+
+/* ─── 신청서 상세 (카드 클릭 시 전체화면 오버레이) ─────────────── */
+
+function DetailRow({ label, value }: { label: string; value?: string | number | null }) {
+  const shown = value === null || value === undefined || value === "" ? "-" : value;
+  return (
+    <div className="flex items-start justify-between gap-4 border-t border-[#f1f5f9] py-2.5 first:border-t-0">
+      <span className="shrink-0 text-sm font-semibold text-[#94a3b8]">{label}</span>
+      <span className="text-right text-[15px] font-medium text-[#1e293b]">{shown}</span>
+    </div>
+  );
+}
+
+function ApplicationDetail({ app, onClose }: { app: Application; onClose: () => void }) {
+  const items = app.물품목록 ?? [];
+  return (
+    <div className="font-pretendard fixed inset-0 z-50 flex flex-col bg-[#f2f4f7]">
+      <div className="flex h-14 shrink-0 items-center gap-1 bg-[#f2f4f7] px-2 pt-safe-top">
+        <button onClick={onClose} aria-label="닫기" className="flex size-10 items-center justify-center">
+          <ArrowLeft size={24} className="text-[#1e293b]" />
+        </button>
+        <h2 className="text-lg font-bold text-[#1e293b]">신청서 상세</h2>
+      </div>
+
+      <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-12 pt-2">
+        {/* 기본 정보 */}
+        <section className="flex flex-col rounded-xl bg-white px-[18px] py-3">
+          <h3 className="pb-1 text-sm font-bold text-[#0043ff]">기본 정보</h3>
+          <DetailRow label="신청번호" value={app.신청번호} />
+          <DetailRow label="신청일자" value={app.신청일자} />
+          <DetailRow label="신청부서" value={app.신청부서} />
+          <DetailRow label="신청자" value={app.신청자} />
+          <DetailRow label="연락처" value={app.연락처} />
+        </section>
+
+        {/* 물품 목록 */}
+        <section className="flex flex-col gap-3">
+          <h3 className="px-1 text-sm font-bold text-[#0043ff]">물품 목록 ({items.length})</h3>
+          {items.length === 0 && (
+            <p className="rounded-xl bg-white px-[18px] py-4 text-sm text-[#64748b]">등록된 품목이 없습니다.</p>
+          )}
+          {items.map((it, i) => (
+            <div key={i} className="flex flex-col rounded-xl bg-white px-[18px] py-3">
+              <div className="flex items-center justify-between pb-2">
+                <p className="truncate pr-2 text-base font-bold text-[#1e293b]">{it.품명}</p>
+                <span className="shrink-0 rounded-full bg-[#e4ebff] px-2.5 py-1 text-xs font-bold text-[#0043ff]">
+                  필요인원 {it.필요인원수 ?? 0}명
+                </span>
+              </div>
+              <DetailRow label="규격/모델" value={it.규격모델} />
+              <DetailRow label="자산번호" value={it.자산번호} />
+              <DetailRow label="설치장소" value={it.설치장소} />
+              <DetailRow label="수량" value={it.수량} />
+              <DetailRow label="금액" value={it.금액} />
+            </div>
+          ))}
+        </section>
+      </div>
     </div>
   );
 }
@@ -450,6 +515,7 @@ export default function SchedulePage() {
   const [includeCompleted, setIncludeCompleted] = useState(true);
   const [optimizing, setOptimizing] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
+  const [detailApp, setDetailApp] = useState<Application | null>(null);
   async function load() {
     setLoading(true);
     setError(null);
@@ -473,6 +539,13 @@ export default function SchedulePage() {
     });
     return list;
   }, [apps, includeCompleted, sort]);
+
+  // 최적화 대상: 점검완료됐지만 아직 출동일시가 안 잡힌(미처리) 신청서.
+  // 하나도 없으면 이미 최적화된 상태이므로 최적화 버튼을 숨긴다.
+  const hasOptimizable = useMemo(
+    () => apps.some((a) => a.점검완료 && !a.출동일시 && !isCompleted(a)),
+    [apps],
+  );
 
   async function handleOptimize() {
     setOptimizing(true);
@@ -537,22 +610,24 @@ export default function SchedulePage() {
           <p className="mt-16 text-center text-sm text-[#94a3b8]">표시할 신청서가 없습니다.</p>
         )}
         {visible.map((app) => (
-          <OverviewCard key={app.id ?? app.신청번호} app={app} />
+          <OverviewCard key={app.id ?? app.신청번호} app={app} onClick={() => setDetailApp(app)} />
         ))}
       </div>
 
-      <button
-        onClick={handleOptimize}
-        disabled={optimizing}
-        aria-label="최적화"
-        className="fixed bottom-[calc(104px+env(safe-area-inset-bottom))] left-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#475569] text-white shadow-lg disabled:opacity-60"
-      >
-        {optimizing ? (
-          <span className="size-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-        ) : (
-          <Sparkles size={22} />
-        )}
-      </button>
+      {hasOptimizable && (
+        <button
+          onClick={handleOptimize}
+          disabled={optimizing}
+          aria-label="최적화"
+          className="fixed bottom-[calc(104px+env(safe-area-inset-bottom))] left-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#475569] text-white shadow-lg disabled:opacity-60"
+        >
+          {optimizing ? (
+            <span className="size-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+          ) : (
+            <Sparkles size={22} />
+          )}
+        </button>
+      )}
 
       <button
         onClick={() => setPendingFiles([])}
@@ -568,6 +643,10 @@ export default function SchedulePage() {
           onClose={() => setPendingFiles(null)}
           onDone={() => { setPendingFiles(null); load(); }}
         />
+      )}
+
+      {detailApp && (
+        <ApplicationDetail app={detailApp} onClose={() => setDetailApp(null)} />
       )}
 
       <TabBar />

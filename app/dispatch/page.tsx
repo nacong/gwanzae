@@ -514,14 +514,19 @@ function slotLabel(iso: string): { title: string; range: string } {
   return { title: `${ampm} ${h12}시 출발 건`, range: `${fmt(d)} - ${fmt(end)}` };
 }
 
-function OverviewCard({ card, active }: { card: DispatchCard; active?: boolean }) {
+/** 진행 상태: 지나간(past) / 현재(current) / 이후(future) */
+type StopState = "past" | "current" | "future";
+
+function OverviewCard({ card, highlight }: { card: DispatchCard; highlight?: boolean }) {
   return (
-    <div className={`flex w-full flex-col gap-3.5 rounded-xl border px-[18px] py-4 ${active ? "border-[#e2e8f0] bg-[#e2e8f0] text-[#1e293b]" : "border-[#e2e8f0] bg-[#f2f4f7] text-[#94a3b8]"}`}>
+    <div className={`flex w-full flex-col gap-3.5 rounded-xl px-[18px] py-4 ${
+      highlight ? "bg-[#e2e8f0] text-[#1e293b]" : "border border-[#e2e8f0] bg-[#f2f4f7] text-[#94a3b8]"
+    }`}>
       <div className="flex items-start justify-between">
         <p className="text-sm">{card.신청번호}</p>
         <p className="text-xs">{card.신청일자}</p>
       </div>
-      <div className={`flex items-end gap-1.5 ${active ? "text-[#475569]" : ""}`}>
+      <div className={`flex items-end gap-1.5 ${highlight ? "text-[#475569]" : ""}`}>
         <p className="text-base font-bold">{card.신청부서}</p>
         <p className="truncate text-[13px]">{card.itemSummary}</p>
       </div>
@@ -529,23 +534,31 @@ function OverviewCard({ card, active }: { card: DispatchCard; active?: boolean }
   );
 }
 
-function OverviewStop({ stop, isLast, active }: { stop: DispatchStop; isLast: boolean; active: boolean }) {
-  const isWarehouse = stop.kind === "warehouse";
-  const dotBorder = active || isWarehouse ? "border-[#5b86ff]" : "border-[#e2e8f0]";
-  const dotIcon = isWarehouse ? Home : MapPin;
-  const DotIcon = dotIcon;
-  const titleColor = isWarehouse && stop.건물명.includes("출발") ? "text-[#94a3b8]" : active ? "text-[#1e293b]" : "text-[#1e293b]";
+/* 진행 타임라인 규칙 (Figma: 네비 - 작업 목록)
+   - 점(dot): 현재 정류장까지 파란색(#5b86ff), 이후는 회색(#e2e8f0)  → dotBlue
+   - 선(line): 현재 직전 구간까지 파란색, 현재 이후는 회색           → lineBlue
+   - 제목: 지나간 곳만 회색(#94a3b8), 현재·이후는 진한색(#1e293b)
+   - 카드: 현재만 하이라이트(#e2e8f0), 나머지는 회색 카드 */
+function OverviewStop({ stop, isLast, state, dotBlue, lineBlue }: {
+  stop: DispatchStop; isLast: boolean; state: StopState; dotBlue: boolean; lineBlue: boolean;
+}) {
+  const isCurrent = state === "current";
+  const DotIcon = stop.kind === "warehouse" ? Home : MapPin;
+  const dotBorder = dotBlue ? "border-[#5b86ff]" : "border-[#e2e8f0]";
+  const dotIconColor = dotBlue ? "text-[#5b86ff]" : "text-[#94a3b8]";
+  const lineColor = lineBlue ? "bg-[#5b86ff]" : "bg-[#e2e8f0]";
+  const titleColor = state === "past" ? "text-[#94a3b8]" : "text-[#1e293b]";
   return (
     <div className="flex gap-4">
       <div className="flex w-6 flex-col items-center self-stretch">
         <div className={`flex size-6 items-center justify-center rounded-xl border-2 bg-white ${dotBorder}`}>
-          <DotIcon size={12} className={active || isWarehouse ? "text-[#5b86ff]" : "text-[#94a3b8]"} />
+          <DotIcon size={12} className={dotIconColor} />
         </div>
-        {!isLast && <div className={`w-0.5 flex-1 rounded-[1px] ${active ? "bg-[#5b86ff]" : "bg-[#e2e8f0]"}`} />}
+        {!isLast && <div className={`w-0.5 flex-1 rounded-[1px] ${lineColor}`} />}
       </div>
-      <div className={`flex flex-1 flex-col gap-3 pb-8 ${active ? "rounded-xl border-2 border-[#5b86ff] bg-white p-4" : ""}`}>
+      <div className={`flex flex-1 flex-col gap-3 ${isCurrent ? "mb-8 rounded-xl border-2 border-[#5b86ff] bg-white p-4" : "pb-8"}`}>
         <p className={`text-base font-bold ${titleColor}`}>{stop.건물명}</p>
-        {stop.cards.map((c, i) => <OverviewCard key={i} card={c} active={active} />)}
+        {stop.cards.map((c, i) => <OverviewCard key={i} card={c} highlight={isCurrent} />)}
       </div>
     </div>
   );
@@ -555,8 +568,9 @@ function OverviewScreen({ plan, onBack, onStart, onSkip }: {
   plan: DispatchPlan; onBack: () => void; onStart: () => void; onSkip: () => void;
 }) {
   const { title, range } = slotLabel(plan.출동일시);
-  // 현재(첫 번째) 건물 정류장을 강조
-  const firstBuildingIdx = plan.stops.findIndex((s) => s.kind === "building");
+  // 출동 직후 오버뷰: 첫 번째 건물 정류장이 '현재 진행 중'.
+  // 창고 출발 등 그 앞은 지나간 것으로, 이후 정류장은 아직 안 간 것으로 표시.
+  const currentIdx = plan.stops.findIndex((s) => s.kind === "building");
   return (
     <div className="font-pretendard fixed inset-0 flex flex-col bg-[#f2f4f7]">
       <div className="flex items-center gap-3 border-b border-[#e2e8f0] px-5 pt-safe-top"
@@ -571,9 +585,19 @@ function OverviewScreen({ plan, onBack, onStart, onSkip }: {
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 pb-[92px] pt-5">
-        {plan.stops.map((stop, i) => (
-          <OverviewStop key={i} stop={stop} isLast={i === plan.stops.length - 1} active={i === firstBuildingIdx} />
-        ))}
+        {plan.stops.map((stop, i) => {
+          const state: StopState = i < currentIdx ? "past" : i === currentIdx ? "current" : "future";
+          return (
+            <OverviewStop
+              key={i}
+              stop={stop}
+              isLast={i === plan.stops.length - 1}
+              state={state}
+              dotBlue={i <= currentIdx}
+              lineBlue={i < currentIdx}
+            />
+          );
+        })}
       </div>
 
       <div className="fixed inset-x-0 bottom-0 flex items-center gap-2 bg-[#f2f4f7] px-4 pb-safe-bottom pt-3">
