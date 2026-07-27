@@ -137,7 +137,7 @@ function StopRow({ stop, isLast }: { stop: Stop; isLast: boolean }) {
         {!isLast && <div className="w-0.5 flex-1 rounded-[1px] bg-[#e2e8f0]" />}
       </div>
       <div className="flex w-[273px] flex-col items-start gap-3 pb-8">
-        <p className="text-base font-bold text-[#1e293b]">{stop.건물명}</p>
+        <p className={`font-bold text-[#1e293b] ${isWarehouse ? "text-sm" : "text-base"}`}>{stop.건물명}</p>
         {stop.cards.map((c, i) => <AppCard key={i} card={c} />)}
       </div>
     </div>
@@ -174,8 +174,7 @@ export default function TodayPage() {
     })();
   }, []);
 
-  async function handleDispatch() {
-    const slot = slots[active];
+  async function handleDispatch(slot: Slot) {
     if (!slot) return;
     setDispatching(true);
     setError(null);
@@ -218,12 +217,12 @@ export default function TodayPage() {
   }
 
   return (
-    <div className="font-pretendard flex min-h-dvh flex-col bg-[#f2f4f7] pb-[calc(161px+env(safe-area-inset-bottom))]">
-      <header className="mt-6 flex h-20 items-center justify-between px-5 pt-safe-top">
+    <div className="font-pretendard flex h-dvh flex-col overflow-hidden bg-[#f2f4f7] pb-[calc(80px+env(safe-area-inset-bottom,0px))]">
+      <header className="mt-2 flex h-14 shrink-0 items-center justify-between px-5 pt-safe-top">
         <h1 className="text-2xl font-extrabold text-[#111827]">오늘 수거 일정</h1>
       </header>
 
-      <main className="flex min-h-0 flex-1 flex-col items-center gap-4 p-5">
+      <main className="flex min-h-0 flex-1 flex-col items-center gap-4 px-5 pb-0 pt-2">
         {loading && <p className="mt-20 text-sm text-[#94a3b8]">일정을 불러오는 중…</p>}
         {error && (
           <div className="w-full rounded-xl bg-white p-4">
@@ -257,11 +256,11 @@ export default function TodayPage() {
                 return (
                   <div key={slot.key} className="h-full w-full shrink-0 snap-center">
                     <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border-2 border-[#003dea] bg-white">
-                      <div className="flex flex-col gap-3 border-b border-[#e2e8f0] px-6 py-5">
+                      <div className="flex flex-col gap-1 border-b border-[#e2e8f0] px-5 py-4">
                         <p className="text-[22px] font-bold text-[#1e293b]">{title}</p>
                         <p className="text-base text-[#475569]">{range}</p>
                       </div>
-                      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 py-5">
+                      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pt-4 pb-2">
                         {slot.stops.map((stop, i) => (
                           <StopRow key={i} stop={stop} isLast={i === slot.stops.length - 1} />
                         ))}
@@ -286,19 +285,18 @@ export default function TodayPage() {
         )}
       </main>
 
-      <div
-        className="fixed inset-x-0 z-30 bg-[#f2f4f7] px-5 pb-3 pt-2"
-        style={{ bottom: "calc(81px + env(safe-area-inset-bottom))" }}
-      >
-        <button
-          onClick={handleDispatch}
-          disabled={dispatching || slots.length === 0}
-          className="flex w-full items-center justify-center gap-3 rounded-xl bg-[#0043ff] px-6 py-4 text-lg font-semibold text-white disabled:bg-[#d0ddef] disabled:text-[#6b7fa0]"
-        >
-          <Truck size={22} />
-          {dispatching ? "출동 준비 중…" : "출동"}
-        </button>
-      </div>
+      {slots.length > 0 && (
+        <div className="shrink-0 px-5 py-3">
+          <button
+            onClick={() => handleDispatch(slots[active])}
+            disabled={dispatching}
+            className="flex w-full items-center justify-center gap-3 rounded-xl bg-[#0043ff] px-6 py-4 text-lg font-semibold text-white disabled:bg-[#d0ddef] disabled:text-[#6b7fa0]"
+          >
+            <Truck size={22} />
+            {dispatching ? "출동 준비 중…" : "출동"}
+          </button>
+        </div>
+      )}
 
       <TabBar />
     </div>

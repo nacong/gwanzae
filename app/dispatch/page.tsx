@@ -557,7 +557,7 @@ function OverviewStop({ stop, isLast, state, dotBlue, lineBlue }: {
         {!isLast && <div className={`w-0.5 flex-1 rounded-[1px] ${lineColor}`} />}
       </div>
       <div className={`flex flex-1 flex-col gap-3 ${isCurrent ? "mb-8 rounded-xl border-2 border-[#5b86ff] bg-white p-4" : "pb-8"}`}>
-        <p className={`text-base font-bold ${titleColor}`}>{stop.건물명}</p>
+        <p className={`font-bold ${stop.kind === "warehouse" ? "text-sm" : "text-base"} ${titleColor}`}>{stop.건물명}</p>
         {stop.cards.map((c, i) => <OverviewCard key={i} card={c} highlight={isCurrent} />)}
       </div>
     </div>

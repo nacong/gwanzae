@@ -534,8 +534,10 @@ export default function SchedulePage() {
   const visible = useMemo(() => {
     let list = includeCompleted ? apps : apps.filter((a) => !isCompleted(a));
     list = [...list].sort((a, b) => {
-      if (sort === "신청일순") return (b.신청일자 ?? "").localeCompare(a.신청일자 ?? "");
-      return (a.출동일시 ?? "9999").localeCompare(b.출동일시 ?? "9999");
+      // 신청일순: 오래된 신청부터(오름차순)
+      if (sort === "신청일순") return (a.신청일자 ?? "").localeCompare(b.신청일자 ?? "");
+      // 출동일순: 최근 출동부터(내림차순). 출동일시 없는 건은 뒤로.
+      return (b.출동일시 ?? "").localeCompare(a.출동일시 ?? "");
     });
     return list;
   }, [apps, includeCompleted, sort]);
@@ -567,7 +569,7 @@ export default function SchedulePage() {
 
   return (
     <div className="font-pretendard flex min-h-dvh flex-col bg-[#f2f4f7] pb-[calc(80px+env(safe-area-inset-bottom))]">
-      <header className="mt-6 flex h-20 items-center justify-between px-5 pt-safe-top">
+      <header className="mt-2 flex h-14 shrink-0 items-center justify-between px-5 pt-safe-top">
         <h1 className="text-2xl font-extrabold text-[#111827]">신청서</h1>
         <div className="flex items-center rounded-full bg-white p-0.5">
           {(["신청일순", "출동일순"] as SortKey[]).map((k) => (
