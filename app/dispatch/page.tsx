@@ -404,6 +404,32 @@ function NavHeader({ title, onBack }: { title: string; onBack: () => void }) {
   );
 }
 
+/* ─── 나가기 확인 다이얼로그 ──────────────────────────────── */
+
+function ExitConfirmDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center px-8" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-black/50" onClick={onCancel} />
+      <div className="relative flex w-full max-w-[320px] flex-col gap-6 rounded-3xl bg-white px-6 pb-6 pt-7 shadow-[0_10px_30px_rgba(0,0,0,0.15)]">
+        <div className="flex flex-col gap-2 text-center">
+          <p className="text-lg font-bold text-[#111827]">정말 나가시겠습니까?</p>
+          <p className="text-sm text-[#6b7280]">나가면 오늘 화면으로 이동합니다.</p>
+        </div>
+        <div className="flex items-stretch gap-3">
+          <button onClick={onCancel}
+            className="flex h-[52px] flex-1 items-center justify-center rounded-xl border border-[#e5e7eb] bg-white text-base font-semibold text-[#111827]">
+            취소
+          </button>
+          <button onClick={onConfirm}
+            className="flex h-[52px] flex-1 items-center justify-center rounded-xl bg-[#0043ff] text-base font-semibold text-white">
+            나가기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─── 하단 안내/버튼 바 ───────────────────────────────────── */
 
 function GuideBar({ guide, isLast, primaryLabel, primaryIcon, onPrev, onPrimary }: {
@@ -608,13 +634,12 @@ function OverviewStop({ stop, isLast, state, dotBlue, lineBlue }: {
   );
 }
 
-function OverviewScreen({ plan, onBack, onStart, onSkip }: {
-  plan: DispatchPlan; onBack: () => void; onStart: () => void; onSkip: () => void;
+function OverviewScreen({ plan, currentIdx, onBack, onStart, onSkip }: {
+  plan: DispatchPlan; currentIdx: number; onBack: () => void; onStart: () => void; onSkip: () => void;
 }) {
   const { title, range } = slotLabel(plan.출동일시);
-  // 출동 직후 오버뷰: 첫 번째 건물 정류장이 '현재 진행 중'.
-  // 창고 출발 등 그 앞은 지나간 것으로, 이후 정류장은 아직 안 간 것으로 표시.
-  const currentIdx = plan.stops.findIndex((s) => s.kind === "building");
+  // 현재 진행 중인 건물 정류장(currentIdx)을 기준으로 지나간/현재/이후를 표시한다.
+  // 각 건물 네비를 마치면 다음 건물이 '현재'가 되어 이 화면으로 다시 돌아온다.
   return (
     <div className="font-pretendard fixed inset-0 flex flex-col bg-[#f2f4f7]">
       <div className="flex items-center gap-3 border-b border-[#e2e8f0] px-5 pt-safe-top"
@@ -662,8 +687,8 @@ function OverviewScreen({ plan, onBack, onStart, onSkip }: {
 
 // guide: 서버가 완성해 준 안내 문구(guide_text). 비면 소비부에서 폴백 문구를 만든다.
 type WalkStep =
-  | { kind: "move"; 건물명: string; floorLabel: string; guide: string; floor: NavFloor | null; activeRoom?: undefined }
-  | { kind: "pickup"; 건물명: string; floorLabel: string; guide: string; floor: NavFloor | null; room: string; items: DispatchItem[] };
+  | { kind: "move"; bIdx: number; 건물명: string; floorLabel: string; guide: string; floor: NavFloor | null; activeRoom?: undefined }
+  | { kind: "pickup"; bIdx: number; 건물명: string; floorLabel: string; guide: string; floor: NavFloor | null; room: string; items: DispatchItem[] };
 
 function roomKey(s: string): string {
   const m = s.match(/([A-Za-z]?\s?[Bb]?\d+\s*호)/);
@@ -692,7 +717,7 @@ function pickupRoomOf(floor: NavFloor | null): string {
  *  - 동선(스텝)이 아예 없으면 건물 단위 수거 스텝 하나로 대체(수거·사진은 계속 가능). */
 function buildWalk(buildings: DispatchBuilding[], navs: Record<number, NavigationResponse | "error" | undefined>): WalkStep[] {
   const out: WalkStep[] = [];
-  for (const b of buildings) {
+  buildings.forEach((b, bIdx) => {
     const nav = navs[b.scheduleId];
     const steps = nav && nav !== "error" && Array.isArray(nav.steps) ? nav.steps : [];
     const hasServerPickup = steps.some((s) => isPickupType(s.type_label));
@@ -704,14 +729,14 @@ function buildWalk(buildings: DispatchBuilding[], navs: Record<number, Navigatio
       const guide = toStr(s.guide_text);
       if (isPickupType(s.type_label)) {
         const room = pickupRoomOf(floor);
-        out.push({ kind: "pickup", 건물명: b.건물명, floorLabel, guide, floor, room, items: itemsForRoom(b.items, room) });
+        out.push({ kind: "pickup", bIdx, 건물명: b.건물명, floorLabel, guide, floor, room, items: itemsForRoom(b.items, room) });
         pickupAdded = true;
       } else {
-        out.push({ kind: "move", 건물명: b.건물명, floorLabel, guide, floor });
+        out.push({ kind: "move", bIdx, 건물명: b.건물명, floorLabel, guide, floor });
         // 서버가 수거 스텝을 안 줄 때만 이동 스텝의 수거 노드로 수거 스텝을 만든다(중복 방지)
         if (!hasServerPickup) {
           navPoints(floor).filter((p) => p.pickup).forEach((p) => {
-            out.push({ kind: "pickup", 건물명: b.건물명, floorLabel, guide: "", floor, room: p.room, items: itemsForRoom(b.items, p.room) });
+            out.push({ kind: "pickup", bIdx, 건물명: b.건물명, floorLabel, guide: "", floor, room: p.room, items: itemsForRoom(b.items, p.room) });
             pickupAdded = true;
           });
         }
@@ -720,9 +745,9 @@ function buildWalk(buildings: DispatchBuilding[], navs: Record<number, Navigatio
 
     if (!pickupAdded) {
       // 동선 없음(또는 수거 포인트 미표기) → 건물 단위 수거 스텝
-      out.push({ kind: "pickup", 건물명: b.건물명, floorLabel: "", guide: "", floor: null, room: "", items: b.items });
+      out.push({ kind: "pickup", bIdx, 건물명: b.건물명, floorLabel: "", guide: "", floor: null, room: "", items: b.items });
     }
-  }
+  });
   return out;
 }
 
@@ -737,9 +762,11 @@ export default function DispatchPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [phase, setPhase] = useState<"overview" | "nav">("overview");
+  const [buildingIdx, setBuildingIdx] = useState(0); // 현재(다음에 갈) 건물 인덱스
   const [stepIdx, setStepIdx] = useState(0);
   const [animKey, setAnimKey] = useState(0);
   const [photoOpen, setPhotoOpen] = useState(false);
+  const [exitOpen, setExitOpen] = useState(false);
   const [done, setDone] = useState(false);
   const startRef = useRef<number>(Date.now());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -785,6 +812,15 @@ export default function DispatchPage() {
   }, []);
 
   const steps = useMemo(() => (buildings ? buildWalk(buildings, navs) : []), [buildings, navs]);
+  // 건물별 스텝 구간 [start, end] (steps 안에서 각 건물이 차지하는 인덱스 범위)
+  const buildingRanges = useMemo(() => {
+    const ranges: { start: number; end: number }[] = [];
+    steps.forEach((s, i) => {
+      if (!ranges[s.bIdx]) ranges[s.bIdx] = { start: i, end: i };
+      else ranges[s.bIdx].end = i;
+    });
+    return ranges;
+  }, [steps]);
 
   if (loading) {
     return (
@@ -826,11 +862,22 @@ export default function DispatchPage() {
     );
   }
 
-  // 출동 직후: 전체 경로(작업 목록) 오버뷰를 먼저 보여준다. [길안내]/[건너뛰기] → 층별 네비
+  // 현재 건물(buildingIdx)에 해당하는 plan.stops 인덱스 → 오버뷰 진행 표시에 사용
+  const buildingStopIdxs = plan
+    ? plan.stops.map((s, i) => ({ s, i })).filter(({ s }) => s.kind === "building" && s.scheduleId != null).map(({ i }) => i)
+    : [];
+
+  // 출동 직후 & 건물 사이: 전체 경로(작업 목록) 오버뷰를 보여준다. [길안내]/[건너뛰기] → 현재 건물 네비
   if (phase === "overview" && plan) {
-    const startNav = () => { setPhase("nav"); setStepIdx(0); setAnimKey((k) => k + 1); };
+    const startNav = () => {
+      setPhase("nav");
+      setStepIdx(buildingRanges[buildingIdx]?.start ?? 0);
+      setAnimKey((k) => k + 1);
+    };
+    const currentStopIdx = buildingStopIdxs[buildingIdx] ?? plan.stops.findIndex((s) => s.kind === "building");
     return (
-      <OverviewScreen plan={plan} onBack={() => router.push("/today")} onStart={startNav} onSkip={startNav} />
+      <OverviewScreen plan={plan} currentIdx={currentStopIdx}
+        onBack={() => router.push("/today")} onStart={startNav} onSkip={startNav} />
     );
   }
 
@@ -838,6 +885,12 @@ export default function DispatchPage() {
   const step = steps[safeIdx];
   const isLast = safeIdx === steps.length - 1;
   const isPickup = step.kind === "pickup";
+
+  // 현재 건물의 스텝 구간 — 이 건물의 마지막 스텝을 마치면 중간 보고(오버뷰)로 복귀
+  const curB = step.bIdx;
+  const bRange = buildingRanges[curB] ?? { start: safeIdx, end: safeIdx };
+  const isLastOfBuilding = safeIdx === bRange.end;
+  const isLastBuilding = curB >= (buildings?.length ?? 1) - 1;
 
   const roomLabel = isPickup && step.room ? (step.room.endsWith("호") ? step.room : `${step.room}호`) : "";
   const headerTitle = roomLabel ? `${step.건물명} ${roomLabel}` : step.건물명;
@@ -853,9 +906,19 @@ export default function DispatchPage() {
       : `${step.건물명}${step.floorLabel ? ` ${step.floorLabel}` : ""}(으)로 이동하세요`;
   const guideText = step.guide || fallbackGuide;
 
+  // 현재 건물 구간 안에서만 이동. 건물 첫 스텝에서 [이전]을 누르면 중간 보고로 복귀.
   function go(dir: 1 | -1) {
     const next = safeIdx + dir;
-    if (next >= 0 && next < steps.length) { setStepIdx(next); setAnimKey((k) => k + 1); setPhotoOpen(false); }
+    if (dir === -1 && next < bRange.start) { setPhase("overview"); setPhotoOpen(false); return; }
+    if (next >= bRange.start && next <= bRange.end) { setStepIdx(next); setAnimKey((k) => k + 1); setPhotoOpen(false); }
+  }
+
+  // 현재 건물 완료 → 다음 건물이 있으면 중간 보고(오버뷰)로, 마지막 건물이면 전체 완료.
+  function completeBuilding() {
+    setPhotoOpen(false);
+    if (isLastBuilding) { finish(); return; }
+    setBuildingIdx(curB + 1);
+    setPhase("overview");
   }
 
   async function finish() {
@@ -887,16 +950,16 @@ export default function DispatchPage() {
 
   function handlePrimary() {
     if (isPickup) { setPhotoOpen(true); return; }
-    go(1);
+    if (isLastOfBuilding) completeBuilding(); else go(1);
   }
   function afterPhoto() {
     setPhotoOpen(false);
-    if (isLast) finish(); else go(1);
+    if (isLastOfBuilding) completeBuilding(); else go(1);
   }
 
   return (
     <div className="font-pretendard fixed inset-0 overflow-hidden bg-[#f2f4f7]">
-      <NavHeader title={headerTitle} onBack={() => (safeIdx === 0 ? setPhase("overview") : go(-1))} />
+      <NavHeader title={headerTitle} onBack={() => setExitOpen(true)} />
 
       {isPickup ? (
         <div className="absolute inset-x-0 overflow-y-auto px-5"
@@ -925,6 +988,10 @@ export default function DispatchPage() {
 
       {photoOpen && isPickup && (
         <PhotoUploadSheet room={roomLabel || step.건물명} onClose={() => setPhotoOpen(false)} onDone={afterPhoto} />
+      )}
+
+      {exitOpen && (
+        <ExitConfirmDialog onCancel={() => setExitOpen(false)} onConfirm={() => router.push("/today")} />
       )}
     </div>
   );
