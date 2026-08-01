@@ -611,14 +611,15 @@ export default function SchedulePage() {
       <button
         onClick={handleOptimize}
         disabled={optimizing}
-        aria-label="최적화"
-        className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] left-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#475569] text-white shadow-lg disabled:opacity-60"
+        aria-label="일정 정하기"
+        className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] left-4 z-40 flex h-12 items-center justify-center gap-2 rounded-full bg-[#475569] px-5 text-sm font-semibold text-white shadow-lg disabled:opacity-60"
       >
         {optimizing ? (
           <span className="size-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
         ) : (
-          <Sparkles size={22} />
+          <Sparkles size={20} />
         )}
+        {optimizing ? "정하는 중…" : "일정 정하기"}
       </button>
 
       <button

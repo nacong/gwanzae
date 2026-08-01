@@ -245,7 +245,7 @@ export default function TodayPage() {
         {slots.length > 0 && (
           <>
             <div
-              className="flex min-h-0 w-full flex-1 snap-x snap-mandatory gap-4 overflow-x-auto"
+              className="flex min-h-0 w-full flex-1 snap-x snap-mandatory items-start gap-4 overflow-x-auto"
               onScroll={(e) => {
                 const el = e.currentTarget;
                 setActive(Math.round(el.scrollLeft / el.clientWidth));
@@ -254,8 +254,8 @@ export default function TodayPage() {
               {slots.map((slot) => {
                 const { title, range } = slotLabel(slot.출동일시);
                 return (
-                  <div key={slot.key} className="h-full w-full shrink-0 snap-center">
-                    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border-2 border-[#003dea] bg-white">
+                  <div key={slot.key} className="max-h-full w-full shrink-0 snap-center">
+                    <div className="flex max-h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border-2 border-[#003dea] bg-white">
                       <div className="flex flex-col gap-1 border-b border-[#e2e8f0] px-5 py-4">
                         <p className="text-[18px] font-bold text-[#1e293b]">{title}</p>
                         <p className="text-base text-[#475569]">{range}</p>
