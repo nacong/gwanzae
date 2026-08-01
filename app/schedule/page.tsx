@@ -90,10 +90,22 @@ function DetailRow({ label, value }: { label: string; value?: string | number | 
 
 function ApplicationDetail({ app, onClose }: { app: Application; onClose: () => void }) {
   const items = app.물품목록 ?? [];
+
+  // 상세는 라우트가 아닌 오버레이라, 히스토리 항목을 쌓아 뒤로가기(popstate)가
+  // 탭 이동 대신 오버레이 닫기로 소비되게 한다. 화면의 뒤로가기 버튼도 history.back()으로 통일.
+  const closeRef = useRef(onClose);
+  useEffect(() => { closeRef.current = onClose; });
+  useEffect(() => {
+    window.history.pushState({ modal: "app-detail" }, "");
+    const handlePop = () => closeRef.current();
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, []);
+
   return (
     <div className="font-pretendard fixed inset-0 z-50 flex flex-col bg-[#f2f4f7]">
       <div className="flex h-14 shrink-0 items-center gap-1 bg-[#f2f4f7] px-2 pt-safe-top">
-        <button onClick={onClose} aria-label="닫기" className="flex size-10 items-center justify-center">
+        <button onClick={() => window.history.back()} aria-label="닫기" className="flex size-10 items-center justify-center">
           <ArrowLeft size={24} className="text-[#1e293b]" />
         </button>
         <h2 className="text-lg font-bold text-[#1e293b]">신청서 상세</h2>
