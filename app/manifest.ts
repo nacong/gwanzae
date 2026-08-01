@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "관재 AI 출동관리",
-    short_name: "관재출동",
+    name: "이지픽업",
+    short_name: "이지픽업",
     description: "관재처 물품 불용/반납 출동관리 시스템",
     start_url: "/",
     display: "standalone",
