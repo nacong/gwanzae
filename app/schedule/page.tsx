@@ -343,6 +343,20 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
   const [신청일자, set신청일자] = useState("");
   const [items, setItems] = useState<ApplicationItem[]>([]);
 
+  // 상세와 동일: 마법사도 오버레이라 히스토리 항목을 쌓아 뒤로가기가
+  // 탭 이동 대신 마법사 닫기로 소비되게 한다. 취소·완료 모두 history.back()을
+  // 거쳐 닫으므로(완료 시 completedRef로 구분) 히스토리가 어긋나지 않는다.
+  const closeRef = useRef(onClose);
+  const doneRef = useRef(onDone);
+  const completedRef = useRef(false);
+  useEffect(() => { closeRef.current = onClose; doneRef.current = onDone; });
+  useEffect(() => {
+    window.history.pushState({ modal: "app-wizard" }, "");
+    const handlePop = () => (completedRef.current ? doneRef.current() : closeRef.current());
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, []);
+
   function handleFilesPicked(e: React.ChangeEvent<HTMLInputElement>) {
     const picked = Array.from(e.target.files ?? []);
     e.target.value = "";
@@ -395,7 +409,9 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
     setError(null);
     try {
       await updateApplication(appId, { 신청부서, 신청번호, 신청자, 연락처, 신청일자, 물품목록: items, 점검완료: true });
-      onDone();
+      // 쌓아둔 히스토리 항목을 소비하며 닫는다(→ popstate → onDone).
+      completedRef.current = true;
+      window.history.back();
     } catch (e) {
       setError(String(e));
       setStep("items");
@@ -405,7 +421,7 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
   return (
     <div className="font-pretendard fixed inset-0 z-50 flex flex-col bg-[#ebf4ff]">
       <div className="flex h-14 items-center px-2 pt-safe-top">
-        <button onClick={onClose} aria-label="닫기" className="flex size-10 items-center justify-center">
+        <button onClick={() => window.history.back()} aria-label="닫기" className="flex size-10 items-center justify-center">
           <ArrowLeft size={24} className="text-[#1e293b]" />
         </button>
       </div>
