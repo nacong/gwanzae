@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "관재 AI 출동관리",
+  title: "이지픽업",
   description: "관재처 물품 불용/반납 출동관리 시스템",
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "이지픽업" },
   icons: {
