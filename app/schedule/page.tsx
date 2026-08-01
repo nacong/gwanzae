@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Sparkles, ArrowLeft, ScanLine, X } from "lucide-react";
 import TabBar from "@/components/TabBar";
 import {
-  listApplications, optimizeRun, createApplicationFromOcr, updateApplication,
+  listApplications, optimizeRun, createApplicationFromOcr, updateApplication, listProducts,
   type Application, type ApplicationItem,
 } from "@/lib/api";
 
@@ -101,13 +101,15 @@ function ApplicationDetail({ app, onClose }: { app: Application; onClose: () => 
 
       <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 pb-12 pt-2">
         {/* 기본 정보 */}
-        <section className="flex flex-col rounded-xl bg-white px-[18px] py-3">
-          <h3 className="pb-1 text-sm font-bold text-[#0043ff]">기본 정보</h3>
-          <DetailRow label="신청번호" value={app.신청번호} />
-          <DetailRow label="신청일자" value={app.신청일자} />
-          <DetailRow label="신청부서" value={app.신청부서} />
-          <DetailRow label="신청자" value={app.신청자} />
-          <DetailRow label="연락처" value={app.연락처} />
+        <section className="flex flex-col gap-3">
+          <h3 className="px-1 text-sm font-bold text-[#0043ff]">기본 정보</h3>
+          <div className="flex flex-col rounded-xl bg-white px-[18px] py-3">
+            <DetailRow label="신청번호" value={app.신청번호} />
+            <DetailRow label="신청일자" value={app.신청일자} />
+            <DetailRow label="신청부서" value={app.신청부서} />
+            <DetailRow label="신청자" value={app.신청자} />
+            <DetailRow label="연락처" value={app.연락처} />
+          </div>
         </section>
 
         {/* 물품 목록 */}
@@ -218,6 +220,36 @@ function ScanFrame({ srcs }: { srcs: string[] }) {
   );
 }
 
+/* ─── 등록중 애니메이션 (문서 카드가 떠오르며 파란 셔머가 지나간다) ─── */
+
+function SubmittingAnimation() {
+  return (
+    <div className="flex flex-col items-center gap-6">
+      <div className="animate-float-bob relative flex size-[150px] items-center justify-center">
+        <div className="absolute inset-5 rounded-3xl bg-[#0043ff]/10 blur-xl" />
+        <div className="relative flex h-[130px] w-[104px] flex-col gap-2.5 overflow-hidden rounded-2xl bg-white p-4 shadow-[0_12px_30px_rgba(0,67,255,0.18)]">
+          <div className="h-2.5 w-8 rounded-full bg-[#0043ff]" />
+          <div className="h-2 w-full rounded-full bg-[#e2e8f0]" />
+          <div className="h-2 w-3/4 rounded-full bg-[#e2e8f0]" />
+          <div className="h-2 w-full rounded-full bg-[#e2e8f0]" />
+          <div className="h-2 w-2/3 rounded-full bg-[#e2e8f0]" />
+          {/* 셔머 스윕: 스캔 단계와 같은 애니메이션(top 0→100%)을 재사용 */}
+          <div className="animate-scan-line absolute inset-x-0 h-9 bg-gradient-to-b from-transparent via-[#0043ff]/20 to-transparent" />
+        </div>
+      </div>
+      <div className="flex gap-1.5">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="size-2 animate-bounce rounded-full bg-[#0043ff]"
+            style={{ animationDelay: `${i * 0.15}s` }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ─── 신청서 추가 마법사 (촬영 → 인식 → 기본정보 → 필요인원 → 등록) ─── */
 
 function extractErrorDetail(message: string): string {
@@ -255,6 +287,29 @@ function Field({ label, value, onChange, type = "text" }: {
       />
     </div>
   );
+}
+
+// OCR 결과에 필요인원수가 비어 있으면(0·누락) products 마스터(품명 기준) 저장값으로 채운다.
+// 마스터 조회에 실패해도 신청서 흐름은 막지 않는다(원본 그대로 사용).
+async function fillCountsFromProducts(items: ApplicationItem[]): Promise<ApplicationItem[]> {
+  if (!items.some((it) => !((it.필요인원수 ?? 0) > 0))) return items;
+  try {
+    const products = await listProducts();
+    const byName = new Map(products.map((p) => [p.품명, p.필요인원수]));
+    return items.map((it) =>
+      (it.필요인원수 ?? 0) > 0 ? it : { ...it, 필요인원수: byName.get(it.품명) ?? it.필요인원수 ?? 0 }
+    );
+  } catch {
+    return items;
+  }
+}
+
+// 필요인원수가 많을수록 배지 색이 진해진다 (디자인: 1→연회색, 2→연파랑, 3→중파랑, 4↑→진파랑)
+function countBadgeClass(count: number): string {
+  if (count >= 4) return "bg-[#3b82f6] text-white";
+  if (count === 3) return "bg-[#60a5fa] text-white";
+  if (count === 2) return "bg-[#bfdbfe] text-[#475569]";
+  return "bg-[#f1f5f9] text-[#475569]";
 }
 
 type WizardStep = "photo" | "scanning" | "info" | "items" | "submitting";
@@ -305,7 +360,7 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
       set신청자(created.신청자 ?? "");
       set연락처(created.연락처 ?? "");
       set신청일자(created.신청일자 ?? "");
-      setItems(created.물품목록 ?? []);
+      setItems(await fillCountsFromProducts(created.물품목록 ?? []));
       setStep("info");
     } catch (e) {
       setError(String(e));
@@ -315,7 +370,7 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
 
   function updateItemCount(idx: number, delta: number) {
     setItems((prev) => prev.map((it, i) =>
-      i === idx ? { ...it, 필요인원수: Math.max(0, (it.필요인원수 ?? 0) + delta) } : it
+      i === idx ? { ...it, 필요인원수: Math.min(4, Math.max(0, (it.필요인원수 ?? 0) + delta)) } : it
     ));
   }
 
@@ -349,7 +404,7 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
         </div>
       )}
 
-      <div className="flex flex-1 flex-col gap-8 overflow-y-auto px-5 pb-4 pt-6">
+      <div className="flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto overscroll-contain px-5 pb-4 pt-6">
         {step === "photo" && (
           <>
             <div className="flex flex-col gap-4">
@@ -428,8 +483,18 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
 
         {step === "items" && (
           <>
-            <h2 className="text-[28px] font-bold text-[#1e293b]">필요인원을 확인해주세요</h2>
-            <div className="flex flex-col gap-3">
+            <div className="flex shrink-0 flex-col gap-3">
+              <h2 className="text-[28px] font-bold leading-tight text-[#1e293b]">필요인원을 확인해주세요</h2>
+              {연락처.replace(/[^0-9+]/g, "") !== "" && (
+                <a
+                  href={`tel:${연락처.replace(/[^0-9+]/g, "")}`}
+                  className="self-start text-base font-bold text-[#0043ff]"
+                >
+                  전화로 물어보기
+                </a>
+              )}
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain pb-1">
               {items.length === 0 && <p className="text-sm text-[#64748b]">인식된 품목이 없습니다.</p>}
               {items.map((it, i) => (
                 <div key={i} className="flex h-14 items-center justify-between rounded-xl bg-white px-4">
@@ -441,8 +506,8 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
                     >
                       −
                     </button>
-                    <div className="flex h-9 w-11 items-center justify-center rounded-lg bg-[#f1f5f9] text-xl font-bold text-[#475569]">
-                      {(it.필요인원수 ?? 0) > 0 ? it.필요인원수 : ""}
+                    <div className={`flex h-9 w-11 items-center justify-center rounded-lg text-xl font-bold ${countBadgeClass(it.필요인원수 ?? 0)}`}>
+                      {(it.필요인원수 ?? 0) > 0 ? it.필요인원수 : "0"}
                     </div>
                     <button
                       onClick={() => updateItemCount(i, 1)}
@@ -459,7 +524,10 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
         )}
 
         {step === "submitting" && (
-          <h2 className="text-[28px] font-bold text-[#1e293b]">신청서를 등록중이에요</h2>
+          <div className="flex flex-1 flex-col items-center justify-center gap-10">
+            <SubmittingAnimation />
+            <h2 className="text-[28px] font-bold text-[#1e293b]">신청서를 등록중이에요</h2>
+          </div>
         )}
       </div>
 

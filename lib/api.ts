@@ -175,6 +175,17 @@ export async function updateApplication(appId: number, patch: ApplicationPatch):
   return handle<Application>(res, `PATCH /applications/${appId}`);
 }
 
+// products 마스터 — 품명별 기본 필요인원수 (신청서 생성 시 이 값으로 채워진다)
+export type Product = {
+  품명: string;
+  필요인원수: number;
+};
+
+export async function listProducts(): Promise<Product[]> {
+  const res = await fetch(`${API_BASE}/products?limit=1000`, { headers: headers(false) });
+  return handle<Product[]>(res, "GET /products");
+}
+
 export async function completeApplication(appId: number): Promise<unknown> {
   const res = await fetch(`${API_BASE}/applications/${appId}/complete`, {
     method: "PATCH",
