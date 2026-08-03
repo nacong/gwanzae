@@ -11,7 +11,12 @@ import {
 
 /* 이 화면의 navigation 소비는 스텝 단위 응답을 전제로 한다:
    nav.steps[] = 각 패널(이동/수거). guide_text·floor_label 는 서버가 완성해 준다.
-   floor.path 는 {x,y} 객체 배열, floor.nodes 는 role/kind/label/pickup_items 를 갖는다. */
+   floor.path 는 {x,y} 객체 배열, floor.nodes 는 role/kind/label/pickup_items 를 갖는다.
+
+   좌표계 주의: floor.path/nodes 의 x,y 는 화면 좌표가 아니라 원본 도면 PNG 의 픽셀
+   좌표이며, 그 좌표계 크기가 floor.image_width × image_height 다. 층마다 원본 크기와
+   비율이 다르므로(예: 멀관_1F 1672×941, 멀관_2F 2172×724) 층이 바뀌면 반드시 그 층의
+   크기로 viewBox 를 다시 잡아야 한다. */
 
 /* ─── 데이터 모델 ─────────────────────────────────────────────
    /today 에서 넘겨준 출동 계획(정류장/신청서 카드 + 대표 일정 id)을 읽어,
@@ -51,7 +56,26 @@ function toStr(v: unknown): string {
   return v == null ? "" : String(v);
 }
 
-interface NavPt { x: number; y: number; pickup: boolean; start: boolean; room: string; }
+/** 노드 종류. 서버 floor.nodes[].kind = "elevator" | "stair" | "normal" */
+type NavKind = "elevator" | "stair" | "normal";
+
+interface NavPt {
+  x: number; y: number;
+  pickup: boolean;
+  /** 서버 role="start". '건물 출발점'이 아니라 **이 스텝 폴리라인의 시작점**이다.
+   *  (돌아오는 스텝에서는 수거지가 start 가 된다) 빨간 출발 마커는 walk-through 의
+   *  첫 스텝에서만 쓰도록 showStart 로 게이트한다. */
+  start: boolean;
+  kind: NavKind;
+  room: string;
+}
+
+function toKind(v: unknown): NavKind {
+  const s = toStr(v).toLowerCase();
+  if (/elev|엘리베이터|승강기/.test(s)) return "elevator";
+  if (/stair|계단/.test(s)) return "stair";
+  return "normal";
+}
 
 /** floor.nodes(신규) 를 렌더용 점으로 정규화. role/kind 또는 pickup_items 로 수거/시작을 판별.
  *  (구버전 floor.points 도 함께 흡수해 하위호환) */
@@ -64,16 +88,17 @@ function navPoints(floor: NavFloor | null): NavPt[] {
       : [];
   return arr.map((p) => {
     const role = toStr(pick(p, ["role", "역할"])).toLowerCase();
-    const kind = toStr(pick(p, ["kind", "node_type", "종류", "type"])).toLowerCase();
+    const kindRaw = toStr(pick(p, ["kind", "node_type", "종류", "type"])).toLowerCase();
     const items = pick(p, ["pickup_items", "items", "물품목록"]);
     const hasItems = Array.isArray(items) && items.length > 0;
     return {
       x: toNum(pick(p, ["x", "px", "cx", "좌표x"])) ?? 0,
       y: toNum(pick(p, ["y", "py", "cy", "좌표y"])) ?? 0,
-      pickup: hasItems || /pickup|수거|픽업/.test(role) || /pickup|수거/.test(kind)
+      pickup: hasItems || /pickup|수거|픽업/.test(role) || /pickup|수거/.test(kindRaw)
         || toBool(pick(p, ["수거", "수거여부", "is_pickup", "pickup", "isPickup"])),
-      start: /start|시작|출발/.test(role) || /start|시작/.test(kind)
+      start: /start|시작|출발/.test(role) || /start|시작/.test(kindRaw)
         || toBool(pick(p, ["시작", "시작여부", "is_start", "start", "isStart"])),
+      kind: toKind(kindRaw),
       room: toStr(pick(p, ["label", "호수", "room", "설치장소", "name", "방"])),
     };
   });
@@ -160,7 +185,7 @@ function buildFloorPath(floor: NavFloor | null): string {
     for (const p of navPoints(floor)) raw.push({ x: p.x, y: p.y });
   }
   if (raw.length < 2) return "";
-  return makeRoundedPath(simplifyRoute(raw, 6), 16);
+  return makeRoundedPath(raw, 4);
 }
 
 function viewBoxFor(floor: NavFloor | null, pts: NavPt[], pad = 120): string {
@@ -179,6 +204,7 @@ const INIT_DUR = 2000;
 const LOOP_DUR = 3800;
 const MAP_COLOR = "#1976D2";
 const START_COLOR = "#E53935";
+const FACILITY_COLOR = "#0F766E";
 
 function AnimatedPath({ d, color = MAP_COLOR, width = 12, animKey }: {
   d: string; color?: string; width?: number; animKey: number;
@@ -243,26 +269,49 @@ function AnimatedPath({ d, color = MAP_COLOR, width = 12, animKey }: {
 
 /* ─── NavDot ─────────────────────────────────────────────── */
 
-function NavDot({ p, active }: { p: NavPt; active?: boolean }) {
-  if (p.start) return (
+/** 엘리베이터/계단 마커. 도면 위 시설 아이콘과 같은 자리에 찍힌다. */
+function NavFacility({ p }: { p: NavPt }) {
+  const s = 15;
+  return (
     <g>
-      <circle cx={p.x} cy={p.y} r={28} fill={START_COLOR} opacity={0.18} />
-      <circle cx={p.x} cy={p.y} r={16} fill={START_COLOR} stroke="white" strokeWidth={4} />
+      <rect x={p.x - s} y={p.y - s} width={s * 2} height={s * 2} rx={7}
+        fill="white" stroke={FACILITY_COLOR} strokeWidth={4} />
+      {p.kind === "elevator" ? (
+        <>
+          <path d={`M ${p.x - 7} ${p.y - 1} l 3.5 -6 l 3.5 6 z`} fill={FACILITY_COLOR} />
+          <path d={`M ${p.x} ${p.y + 1} l 3.5 6 l 3.5 -6 z`} fill={FACILITY_COLOR} />
+        </>
+      ) : (
+        <path d={`M ${p.x - 8} ${p.y + 8} h 5 v -5 h 5 v -5 h 6`} fill="none"
+          stroke={FACILITY_COLOR} strokeWidth={3.5} strokeLinecap="round" strokeLinejoin="round" />
+      )}
     </g>
   );
+}
+
+/** showStart: 이 스텝에서 빨간 '출발' 마커를 그릴지. 서버 role="start" 는 스텝 폴리라인의
+ *  시작점일 뿐이라(돌아오는 길에서는 수거지가 start) 건물 첫 스텝에서만 켠다. */
+function NavDot({ p, active, showStart }: { p: NavPt; active?: boolean; showStart?: boolean }) {
   if (p.pickup) return (
     <g>
       <circle cx={p.x} cy={p.y} r={active ? 26 : 20} fill={MAP_COLOR} opacity={active ? 0.22 : 0.15} />
       <circle cx={p.x} cy={p.y} r={active ? 15 : 12} fill={MAP_COLOR} stroke="white" strokeWidth={4} />
     </g>
   );
+  if (p.start && showStart) return (
+    <g>
+      <circle cx={p.x} cy={p.y} r={28} fill={START_COLOR} opacity={0.18} />
+      <circle cx={p.x} cy={p.y} r={16} fill={START_COLOR} stroke="white" strokeWidth={4} />
+    </g>
+  );
+  if (p.kind === "elevator" || p.kind === "stair") return <NavFacility p={p} />;
   return <circle cx={p.x} cy={p.y} r={7} fill={MAP_COLOR} opacity={0.6} stroke="white" strokeWidth={2} />;
 }
 
 /* ─── FloorMapServer — 서버 도면(image_url) 위 픽셀 좌표 렌더 ── */
 
-function FloorMapServer({ animKey, floor, activeRoom, transformRef }: {
-  animKey: number; floor: NavFloor; activeRoom?: string;
+function FloorMapServer({ animKey, floor, activeRoom, showStart, transformRef }: {
+  animKey: number; floor: NavFloor; activeRoom?: string; showStart?: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   transformRef: React.MutableRefObject<any>;
 }) {
@@ -274,8 +323,21 @@ function FloorMapServer({ animKey, floor, activeRoom, transformRef }: {
     const h = toNum(pick(floor, ["image_height", "height", "img_height", "이미지높이", "높이"]));
     return w && h ? { w, h } : null;
   }, [floor]);
-  const [dim, setDim] = useState<{ w: number; h: number } | null>(declaredDim);
-  const [imgError, setImgError] = useState(false);
+
+  // dim 은 state 가 아니라 floor 에서 바로 나오는 파생값이다.
+  // state 로 들면 useState 초기값이 첫 마운트에서만 반영돼, 층이 바뀌어도 이전 층 크기가
+  // 남는다. 층마다 도면 원본 크기·비율이 달라(1672×941 vs 2172×724) viewBox 가 어긋나고
+  // 노드가 엉뚱한 자리에 찍힌다. 수거 스텝에서 이 컴포넌트가 언마운트되므로 "다음으로
+  // 넘어갔다 돌아오면 제대로 나오는" 증상이 됐다. 파생값으로 두면 낡을 수가 없다.
+  const imgKey = toStr(floor.image_url);   // image_url 은 nullable — 캐시 키로 쓰려고 정규화
+  const [natural, setNatural] = useState<Record<string, { w: number; h: number }>>({});
+  const dim = declaredDim ?? natural[imgKey] ?? null;
+
+  // 로드 실패도 이미지별로 기억한다. 단일 boolean 이면 한 층이 실패했을 때 이후 모든
+  // 층이 스키매틱으로 떨어진다(같은 유형의 sticky state).
+  const [errored, setErrored] = useState<Record<string, boolean>>({});
+  const imgError = !!errored[imgKey];
+
   const src = assetUrl(floor.image_url);
   const pts = useMemo(() => navPoints(floor), [floor]);
   const pathD = useMemo(() => buildFloorPath(floor), [floor]);
@@ -320,32 +382,38 @@ function FloorMapServer({ animKey, floor, activeRoom, transformRef }: {
   }, [animKey, dim, bounds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 도면 이미지가 없거나 로드 실패 시 좌표만으로 그리는 스키매틱으로 대체
-  if (imgError) return <FloorMapSchematic animKey={animKey} floor={floor} activeRoom={activeRoom} />;
+  if (imgError) return <FloorMapSchematic animKey={animKey} floor={floor} activeRoom={activeRoom} showStart={showStart} />;
 
   return (
     <div ref={containerRef} style={{ position: "absolute", inset: 0 }}>
       <TransformWrapper ref={transformRef} initialScale={1} minScale={0.3} maxScale={10}
         wheel={{ step: 0.1 }} pinch={{ step: 5 }}>
+        {/* 높이는 containerRef 와 같은 박스여야 오토센터링 계산(cH)이 실제 렌더 박스와
+            일치한다. 100dvh 로 두면 상단 헤더 높이만큼 센터링이 밀린다. */}
         <TransformComponent
-          wrapperStyle={{ width: "100%", height: "100dvh" }}
-          contentStyle={{ width: "100%", height: "100dvh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ position: "relative", width: "100%", height: "100dvh" }}>
+          wrapperStyle={{ width: "100%", height: "100%" }}
+          contentStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ position: "relative", width: "100%", height: "100%" }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={src} alt="도면"
               onLoad={(e) => {
                 // currentTarget 은 핸들러 종료 후 null 이 되므로 즉시 값만 캡처한다
                 const w = e.currentTarget.naturalWidth, h = e.currentTarget.naturalHeight;
-                setDim((prev) => prev ?? { w, h });
+                // 서버가 크기를 안 줬을 때의 폴백. 이미지 URL 로 키를 걸어 다른 층 값이
+                // 섞이지 않게 한다.
+                setNatural((prev) => (prev[imgKey] ? prev : { ...prev, [imgKey]: { w, h } }));
               }}
-              onError={() => setImgError(true)}
+              onError={() => setErrored((prev) => ({ ...prev, [imgKey]: true }))}
               style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", userSelect: "none" }} />
             {dim && (
+              // object-fit:contain 과 preserveAspectRatio="xMidYMid meet" 은 등가라
+              // dim 이 이 이미지의 크기와 같기만 하면 도면과 오버레이가 정확히 정렬된다.
               <svg viewBox={`0 0 ${dim.w} ${dim.h}`} preserveAspectRatio="xMidYMid meet"
                 style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
                 <style>{CSS_ANIM}</style>
                 <AnimatedPath d={pathD} animKey={animKey} />
                 {pts.map((p, i) => (
-                  <NavDot key={i} p={p} active={!!activeRoom && p.room === activeRoom} />
+                  <NavDot key={i} p={p} showStart={showStart} active={!!activeRoom && p.room === activeRoom} />
                 ))}
               </svg>
             )}
@@ -358,8 +426,8 @@ function FloorMapServer({ animKey, floor, activeRoom, transformRef }: {
 
 /* ─── FloorMapSchematic — 도면 이미지 없을 때 좌표만으로 표시 ── */
 
-function FloorMapSchematic({ animKey, floor, activeRoom }: {
-  animKey: number; floor: NavFloor | null; activeRoom?: string;
+function FloorMapSchematic({ animKey, floor, activeRoom, showStart }: {
+  animKey: number; floor: NavFloor | null; activeRoom?: string; showStart?: boolean;
 }) {
   const pts = useMemo(() => navPoints(floor), [floor]);
   const pathD = useMemo(() => buildFloorPath(floor), [floor]);
@@ -380,7 +448,9 @@ function FloorMapSchematic({ animKey, floor, activeRoom }: {
         {pts.filter((p) => p.pickup && p.room).map((p, i) => (
           <text key={`lbl${i}`} x={p.x + 20} y={p.y + 8} fontSize={22} fill="#11111199" fontWeight="600">{p.room}</text>
         ))}
-        {pts.map((p, i) => <NavDot key={i} p={p} active={!!activeRoom && p.room === activeRoom} />)}
+        {pts.map((p, i) => (
+          <NavDot key={i} p={p} showStart={showStart} active={!!activeRoom && p.room === activeRoom} />
+        ))}
       </svg>
     </div>
   );
@@ -690,8 +760,11 @@ type WalkStep =
   | { kind: "move"; bIdx: number; 건물명: string; floorLabel: string; guide: string; floor: NavFloor | null; activeRoom?: undefined }
   | { kind: "pickup"; bIdx: number; 건물명: string; floorLabel: string; guide: string; floor: NavFloor | null; room: string; items: DispatchItem[] };
 
+/** 설치장소에서 호수만 뽑는다.
+ *  하이픈(B104-2호, 102-1호)과 접미 영문(3993C호)을 포함해야 한 건물에 여러 호수가 있을 때
+ *  오매칭되지 않는다. */
 function roomKey(s: string): string {
-  const m = s.match(/([A-Za-z]?\s?[Bb]?\d+\s*호)/);
+  const m = s.match(/([A-Za-z]{0,2}\s?\d+(?:-\d+)?[A-Za-z]?\s*호)/);
   return (m ? m[1] : s).replace(/\s+/g, "");
 }
 function itemsForRoom(items: DispatchItem[], room: string): DispatchItem[] {
@@ -890,6 +963,7 @@ export default function DispatchPage() {
   const curB = step.bIdx;
   const bRange = buildingRanges[curB] ?? { start: safeIdx, end: safeIdx };
   const isLastOfBuilding = safeIdx === bRange.end;
+  const isFirstOfBuilding = safeIdx === bRange.start;
   const isLastBuilding = curB >= (buildings?.length ?? 1) - 1;
 
   const roomLabel = isPickup && step.room ? (step.room.endsWith("호") ? step.room : `${step.room}호`) : "";
@@ -970,9 +1044,19 @@ export default function DispatchPage() {
         <div className="absolute inset-x-0"
           style={{ top: "calc(56px + env(safe-area-inset-top))", bottom: 0 }}>
           {step.floor?.image_url ? (
-            <FloorMapServer animKey={animKey} floor={step.floor} transformRef={transformRef} />
+            // key 를 걸어 리마운트시키지 않는다. FloorMapServer 내부의 dim 이 파생값이라
+            // 층이 바뀌면 스스로 따라가고, 리마운트하면 오히려 TransformWrapper 가 새로
+            // 만들어지며 transformRef 가 한 프레임 동안 죽은 인스턴스를 가리킬 수 있다.
+            <FloorMapServer
+              animKey={animKey}
+              floor={step.floor}
+              showStart={isFirstOfBuilding}
+              transformRef={transformRef} />
           ) : (
-            <FloorMapSchematic animKey={animKey} floor={step.floor} />
+            <FloorMapSchematic
+              animKey={animKey}
+              floor={step.floor}
+              showStart={isFirstOfBuilding} />
           )}
         </div>
       )}
