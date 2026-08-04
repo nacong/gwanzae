@@ -11,12 +11,6 @@ import {
 
 /* 이 화면의 navigation 소비는 스텝 단위 응답을 전제로 한다:
    nav.steps[] = 각 패널(이동/수거). guide_text·floor_label 는 서버가 완성해 준다.
-   floor.path 는 {x,y} 객체 배열, floor.nodes 는 role/kind/label/pickup_items 를 갖는다.
-
-   좌표계 주의: floor.path/nodes 의 x,y 는 화면 좌표가 아니라 원본 도면 PNG 의 픽셀
-   좌표이며, 그 좌표계 크기가 floor.image_width × image_height 다. 층마다 원본 크기와
-   비율이 다르므로(예: 멀관_1F 1672×941, 멀관_2F 2172×724) 층이 바뀌면 반드시 그 층의
-   크기로 viewBox 를 다시 잡아야 한다. */
 
 /* ─── 데이터 모델 ─────────────────────────────────────────────
    /today 에서 넘겨준 출동 계획(정류장/신청서 카드 + 대표 일정 id)을 읽어,
@@ -24,8 +18,10 @@ import {
    2) [길안내] 시 일정별 GET /schedules/{id}/navigation 으로 층별 도면 동선을
       받아 [이동 → 수거(사진)] walk-through 로 펼친다.                */
 
-interface DispatchItem { 품명: string; 수량: number; 설치장소: string; }
-interface DispatchCard { 신청번호: string; 신청일자: string; 신청부서: string; itemSummary: string; }
+/** 자산번호 — 현장에서 물품을 대조하는 키. /today 가 스케줄에서 실어 보낸다(구 캐시엔 없어 optional). */
+interface DispatchItem { 자산번호?: string; 품명: string; 수량: number; 설치장소: string; }
+/** 신청자·연락처 — 헤더의 전화 버튼이 쓰는 값. /today 가 /applications 에서 매칭해 실어 보낸다(구 캐시엔 없어 optional). */
+interface DispatchCard { 신청번호: string; 신청일자: string; 신청부서: string; itemSummary: string; 신청자?: string; 연락처?: string; }
 interface DispatchStop {
   건물명: string;
   kind: "warehouse" | "building";
@@ -185,7 +181,7 @@ function buildFloorPath(floor: NavFloor | null): string {
     for (const p of navPoints(floor)) raw.push({ x: p.x, y: p.y });
   }
   if (raw.length < 2) return "";
-  return makeRoundedPath(raw, 4);
+  return makeRoundedPath(simplifyRoute(raw, 3), 4);
 }
 
 function viewBoxFor(floor: NavFloor | null, pts: NavPt[], pad = 120): string {
@@ -220,14 +216,19 @@ function AnimatedPath({ d, color = MAP_COLOR, width = 12, animKey }: {
     if (!line || !halo || !arrow || !d) return;
 
     const len = line.getTotalLength();
-    [line, halo].forEach((el) => {
+    if (!isFinite(len) || len <= 0) return;
+
+    // 정지 상태를 '전부 보임'(dashoffset 0)으로 둔다. 예전 구현은 정지 상태가
+    // '전부 숨김'(dashoffset = len)이라, CSS 애니메이션 재시작이 실패하면 선이
+    // 통째로 사라졌다(노드만 정상으로 보이는 증상). WAAPI 는 no-op 이 없다.
+    const anims = [line, halo].map((el) => {
+      el.style.animation = "";
       el.style.strokeDasharray = String(len);
-      el.style.strokeDashoffset = String(len);
-      el.style.animation = "none";
-    });
-    void line.getBoundingClientRect();
-    [line, halo].forEach((el) => {
-      el.style.animation = `dispatchDraw 2s cubic-bezier(.18,.72,.18,1) forwards`;
+      el.style.strokeDashoffset = "0";
+      return el.animate(
+        [{ strokeDashoffset: String(len) }, { strokeDashoffset: "0" }],
+        { duration: INIT_DUR, easing: "cubic-bezier(.18,.72,.18,1)", fill: "both" },
+      );
     });
 
     let startTime: number | null = null;
@@ -249,7 +250,11 @@ function AnimatedPath({ d, color = MAP_COLOR, width = 12, animKey }: {
     }
     placeArrow(0);
     rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
+
+    return () => {
+      anims.forEach((a) => a.cancel());
+      cancelAnimationFrame(rafRef.current);
+    };
   }, [d, animKey]);
 
   if (!d) return null;
@@ -323,20 +328,13 @@ function FloorMapServer({ animKey, floor, activeRoom, showStart, transformRef }:
     const h = toNum(pick(floor, ["image_height", "height", "img_height", "이미지높이", "높이"]));
     return w && h ? { w, h } : null;
   }, [floor]);
+  const [dim, setDim] = useState<{ w: number; h: number } | null>(declaredDim);
+  const [imgError, setImgError] = useState(false);
 
-  // dim 은 state 가 아니라 floor 에서 바로 나오는 파생값이다.
-  // state 로 들면 useState 초기값이 첫 마운트에서만 반영돼, 층이 바뀌어도 이전 층 크기가
-  // 남는다. 층마다 도면 원본 크기·비율이 달라(1672×941 vs 2172×724) viewBox 가 어긋나고
-  // 노드가 엉뚱한 자리에 찍힌다. 수거 스텝에서 이 컴포넌트가 언마운트되므로 "다음으로
-  // 넘어갔다 돌아오면 제대로 나오는" 증상이 됐다. 파생값으로 두면 낡을 수가 없다.
-  const imgKey = toStr(floor.image_url);   // image_url 은 nullable — 캐시 키로 쓰려고 정규화
-  const [natural, setNatural] = useState<Record<string, { w: number; h: number }>>({});
-  const dim = declaredDim ?? natural[imgKey] ?? null;
-
-  // 로드 실패도 이미지별로 기억한다. 단일 boolean 이면 한 층이 실패했을 때 이후 모든
-  // 층이 스키매틱으로 떨어진다(같은 유형의 sticky state).
-  const [errored, setErrored] = useState<Record<string, boolean>>({});
-  const imgError = !!errored[imgKey];
+  // useState 의 초기값은 첫 마운트에서만 쓰이므로, 층이 바뀌어도 dim 이 이전 층 크기로
+  // 남는다. 층마다 도면 원본 크기·비율이 달라(1672×941 vs 2172×724) 그대로 두면 viewBox
+  // 가 어긋나 모든 노드가 엉뚱한 자리에 찍힌다. 호출부의 key 와 함께 이중으로 막는다.
+  useEffect(() => { setDim(declaredDim); setImgError(false); }, [declaredDim]);
 
   const src = assetUrl(floor.image_url);
   const pts = useMemo(() => navPoints(floor), [floor]);
@@ -399,11 +397,10 @@ function FloorMapServer({ animKey, floor, activeRoom, showStart, transformRef }:
               onLoad={(e) => {
                 // currentTarget 은 핸들러 종료 후 null 이 되므로 즉시 값만 캡처한다
                 const w = e.currentTarget.naturalWidth, h = e.currentTarget.naturalHeight;
-                // 서버가 크기를 안 줬을 때의 폴백. 이미지 URL 로 키를 걸어 다른 층 값이
-                // 섞이지 않게 한다.
-                setNatural((prev) => (prev[imgKey] ? prev : { ...prev, [imgKey]: { w, h } }));
+                // 서버가 크기를 안 줬을 때만 natural 크기로 채운다.
+                setDim((prev) => prev ?? { w, h });
               }}
-              onError={() => setErrored((prev) => ({ ...prev, [imgKey]: true }))}
+              onError={() => setImgError(true)}
               style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", userSelect: "none" }} />
             {dim && (
               // object-fit:contain 과 preserveAspectRatio="xMidYMid meet" 은 등가라
@@ -456,21 +453,99 @@ function FloorMapSchematic({ animKey, floor, activeRoom, showStart }: {
   );
 }
 
-/* ─── 상단 헤더 ──────────────────────────────────────────── */
+/* ─── 전화 걸기 ──────────────────────────────────────────────
+   헤더의 전화 버튼 → 현재 건물 신청자에게 tel: 로 연결.
+   한 건물에 신청서가 여러 건이면 누구에게 걸지 시트로 고르게 한다. */
 
-function NavHeader({ title, onBack }: { title: string; onBack: () => void }) {
+interface Contact { tel: string; display: string; label: string; sub?: string }
+
+/** tel: 스킴에 넣을 수 있게 숫자만 남긴다(국제번호 선두 + 는 유지).
+ *  자릿수가 전화번호로 보기 어려우면 "" 를 돌려 걸 수 없는 값으로 취급한다. */
+function telDigits(raw: string): string {
+  const plus = raw.trim().startsWith("+");
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length < 7) return "";
+  return plus ? `+${digits}` : digits;
+}
+
+function contactsOfStop(stop?: DispatchStop): Contact[] {
+  const out: Contact[] = [];
+  const seen = new Set<string>();
+  for (const c of stop?.cards ?? []) {
+    const tel = telDigits(c.연락처 ?? "");
+    if (!tel || seen.has(tel)) continue; // 같은 번호가 여러 신청서에 걸려 있으면 한 번만
+    seen.add(tel);
+    out.push({ tel, display: c.연락처!, label: c.신청자 || c.신청부서 || c.신청번호, sub: c.신청자 ? c.신청부서 : undefined });
+  }
+  return out;
+}
+
+function CallPickSheet({ contacts, onClose }: { contacts: Contact[]; onClose: () => void }) {
   return (
-    <div className="fixed inset-x-0 top-0 z-30 flex items-center justify-between bg-[#f2f4f7] px-5 pt-safe-top"
-      style={{ height: "calc(56px + env(safe-area-inset-top))" }}>
-      <button onClick={onBack} aria-label="뒤로" className="flex size-6 items-center justify-center">
-        <ArrowLeft size={24} className="text-[#111827]" />
-      </button>
-      <p className="text-lg font-bold text-[#111827]">{title}</p>
-      <div className="flex items-center gap-4 text-[#111827]">
-        <Phone size={20} />
-        <MoreVertical size={20} />
+    <div className="fixed inset-0 z-50 flex items-end" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative flex w-full flex-col gap-6 rounded-t-3xl bg-white px-6 pb-11 pt-3 shadow-[0_-4px_12px_rgba(0,0,0,0.1)]">
+        <div className="flex justify-center">
+          <span className="h-1 w-9 rounded-full bg-[#e5e7eb]" />
+        </div>
+        <div className="flex items-center justify-between">
+          <p className="text-xl font-bold text-[#111827]">전화 걸기</p>
+          <button onClick={onClose} aria-label="닫기"
+            className="flex size-8 items-center justify-center rounded-2xl bg-[#f2f4f7]">
+            <X size={20} className="text-[#111827]" />
+          </button>
+        </div>
+        <div className="flex flex-col gap-3">
+          {contacts.map((c) => (
+            <a key={c.tel} href={`tel:${c.tel}`} onClick={onClose}
+              className="flex min-h-[64px] w-full items-center justify-between gap-3 rounded-xl border border-[#e5e7eb] bg-white px-5 py-3">
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate text-base font-semibold text-[#111827]">{c.label}</span>
+                {c.sub && <span className="truncate text-[13px] text-[#6b7280]">{c.sub}</span>}
+              </span>
+              <span className="flex shrink-0 items-center gap-2 text-[15px] font-semibold text-[#0043ff]">
+                <Phone size={18} />
+                {c.display}
+              </span>
+            </a>
+          ))}
+        </div>
       </div>
     </div>
+  );
+}
+
+/* ─── 상단 헤더 ──────────────────────────────────────────── */
+
+function NavHeader({ title, contacts, onBack }: { title: string; contacts: Contact[]; onBack: () => void }) {
+  const [pickOpen, setPickOpen] = useState(false);
+  const only = contacts.length === 1 ? contacts[0] : null;
+  return (
+    <>
+      <div className="fixed inset-x-0 top-0 z-30 flex items-center justify-between bg-[#f2f4f7] px-5 pt-safe-top"
+        style={{ height: "calc(56px + env(safe-area-inset-top))" }}>
+        <button onClick={onBack} aria-label="뒤로" className="flex size-6 items-center justify-center">
+          <ArrowLeft size={24} className="text-[#111827]" />
+        </button>
+        <p className="text-lg font-bold text-[#111827]">{title}</p>
+        <div className="flex items-center gap-4 text-[#111827]">
+          {only ? (
+            <a href={`tel:${only.tel}`} aria-label={`${only.label}에게 전화 걸기 (${only.display})`}
+              className="flex size-6 items-center justify-center">
+              <Phone size={20} />
+            </a>
+          ) : (
+            <button type="button" onClick={() => setPickOpen(true)} disabled={contacts.length === 0}
+              aria-label={contacts.length === 0 ? "등록된 연락처 없음" : "전화 걸 신청자 선택"}
+              className="flex size-6 items-center justify-center disabled:opacity-30">
+              <Phone size={20} />
+            </button>
+          )}
+          <MoreVertical size={20} />
+        </div>
+      </div>
+      {pickOpen && <CallPickSheet contacts={contacts} onClose={() => setPickOpen(false)} />}
+    </>
   );
 }
 
@@ -526,12 +601,15 @@ function GuideBar({ guide, isLast, primaryLabel, primaryIcon, onPrev, onPrimary 
 
 /* ─── 수거 안내: 물품 테이블 ──────────────────────────────── */
 
-const COLLECT_COLS = ["순번", "품명", "수량", "설치장소"] as const;
+const COLLECT_COLS = ["순번", "자산번호", "품명", "수량", "설치장소"] as const;
+
+/* 자산번호는 줄바꿈되면 대조가 어려워 nowrap 으로 두고, 좁은 화면에서는 표 전체를 가로 스크롤시킨다. */
+const COLLECT_GRID = "auto minmax(112px,1.4fr) minmax(72px,1fr) auto minmax(88px,1.4fr)";
 
 function CollectTable({ items }: { items: DispatchItem[] }) {
   return (
     <div className="overflow-x-auto">
-      <div className="inline-grid min-w-full gap-2" style={{ gridTemplateColumns: "auto 1fr auto 1.6fr" }}>
+      <div className="inline-grid min-w-full gap-2" style={{ gridTemplateColumns: COLLECT_GRID }}>
         {COLLECT_COLS.map((c) => (
           <div key={c} className="flex items-center justify-center py-2.5 text-base font-semibold text-[#4b5563]">{c}</div>
         ))}
@@ -540,6 +618,7 @@ function CollectTable({ items }: { items: DispatchItem[] }) {
           return (
             <div key={i} className="contents">
               <div className={cell.replace("bg-white", "bg-[#d0ddef]")}>{i + 1}</div>
+              <div className={`${cell} whitespace-nowrap tabular-nums text-[#111827]`}>{it.자산번호 || "-"}</div>
               <div className={cell}>{it.품명}</div>
               <div className={cell}>{it.수량}</div>
               <div className={`${cell} text-center`}>{it.설치장소 || "-"}</div>
@@ -969,6 +1048,9 @@ export default function DispatchPage() {
   const roomLabel = isPickup && step.room ? (step.room.endsWith("호") ? step.room : `${step.room}호`) : "";
   const headerTitle = roomLabel ? `${step.건물명} ${roomLabel}` : step.건물명;
 
+  // 헤더 전화 버튼 — 지금 가 있는 건물의 신청자 연락처
+  const contacts = contactsOfStop(plan?.stops[buildingStopIdxs[curB]]);
+
   // 안내 문구: 서버 guide_text 를 우선 쓰고, 없을 때만 클라이언트에서 폴백 문구를 만든다.
   const moveRooms = !isPickup
     ? navPoints(step.floor).filter((p) => p.pickup && p.room).map((p) => (p.room.endsWith("호") ? p.room : `${p.room}호`))
@@ -1033,7 +1115,7 @@ export default function DispatchPage() {
 
   return (
     <div className="font-pretendard fixed inset-0 overflow-hidden bg-[#f2f4f7]">
-      <NavHeader title={headerTitle} onBack={() => setExitOpen(true)} />
+      <NavHeader title={headerTitle} contacts={contacts} onBack={() => setExitOpen(true)} />
 
       {isPickup ? (
         <div className="absolute inset-x-0 overflow-y-auto px-5"
@@ -1044,16 +1126,17 @@ export default function DispatchPage() {
         <div className="absolute inset-x-0"
           style={{ top: "calc(56px + env(safe-area-inset-top))", bottom: 0 }}>
           {step.floor?.image_url ? (
-            // key 를 걸어 리마운트시키지 않는다. FloorMapServer 내부의 dim 이 파생값이라
-            // 층이 바뀌면 스스로 따라가고, 리마운트하면 오히려 TransformWrapper 가 새로
-            // 만들어지며 transformRef 가 한 프레임 동안 죽은 인스턴스를 가리킬 수 있다.
+            // key: 층(도면)이 바뀌면 리마운트시켜 dim/zoom 이 이전 층 값으로 남지 않게 한다.
+            // 층마다 도면 원본 크기가 달라(1672×941 ↔ 2172×724) 이게 없으면 좌표가 어긋난다.
             <FloorMapServer
+              key={step.floor.image_url}
               animKey={animKey}
               floor={step.floor}
               showStart={isFirstOfBuilding}
               transformRef={transformRef} />
           ) : (
             <FloorMapSchematic
+              key={`schematic-${safeIdx}`}
               animKey={animKey}
               floor={step.floor}
               showStart={isFirstOfBuilding} />

@@ -13,8 +13,12 @@ interface Card {
   신청일자: string;
   신청부서: string;
   itemSummary: string;
+  /** 현장에서 신청자에게 전화를 걸기 위한 정보 (스케줄엔 없어 /applications 에서 신청번호로 매칭) */
+  신청자?: string;
+  연락처?: string;
 }
 interface DispatchItem {
+  자산번호: string;
   품명: string;
   수량: number;
   설치장소: string;
@@ -52,7 +56,10 @@ function itemSummary(rows: Schedule[]): string {
   return rows.length > 1 ? `${first} 외 ${rows.length - 1}건` : first;
 }
 
-function groupSchedules(rows: Schedule[], dateByApp: Map<string, string>): Slot[] {
+/** 신청번호 → 스케줄엔 없는 신청서 정보(신청일자·신청자·연락처) */
+type AppInfo = { 신청일자?: string; 신청자?: string; 연락처?: string };
+
+function groupSchedules(rows: Schedule[], infoByApp: Map<string, AppInfo>): Slot[] {
   const bySlot = new Map<string, Schedule[]>();
   for (const r of rows) {
     const k = r.출동일시 ?? "미정";
@@ -72,14 +79,20 @@ function groupSchedules(rows: Schedule[], dateByApp: Map<string, string>): Slot[
         const k = r.신청번호 ?? r.신청부서 ?? 건물명;
         (byApp.get(k) ?? byApp.set(k, []).get(k)!).push(r);
       }
-      const cards: Card[] = [...byApp.values()].map((appRows) => ({
-        신청번호: appRows[0].신청번호 ?? "-",
-        // 스케줄 응답엔 신청일자가 없어 신청서(/applications) 데이터에서 신청번호로 매칭
-        신청일자: dateByApp.get(appRows[0].신청번호 ?? "") ?? appRows[0].신청일자 ?? "",
-        신청부서: appRows[0].신청부서 ?? "-",
-        itemSummary: itemSummary(appRows),
-      }));
+      const cards: Card[] = [...byApp.values()].map((appRows) => {
+        // 스케줄 응답엔 신청일자·연락처가 없어 신청서(/applications) 데이터에서 신청번호로 매칭
+        const info = infoByApp.get(appRows[0].신청번호 ?? "");
+        return {
+          신청번호: appRows[0].신청번호 ?? "-",
+          신청일자: info?.신청일자 ?? appRows[0].신청일자 ?? "",
+          신청부서: appRows[0].신청부서 ?? "-",
+          itemSummary: itemSummary(appRows),
+          신청자: info?.신청자,
+          연락처: info?.연락처,
+        };
+      });
       const items: DispatchItem[] = bRows.map((r) => ({
+        자산번호: r.자산번호 ?? "",
         품명: r.품명 ?? "품목",
         수량: r.수량 ?? 1,
         설치장소: r.설치장소 ?? "",
@@ -161,11 +174,11 @@ export default function TodayPage() {
           schedulesToday(),
           listApplications().catch(() => []),
         ]);
-        const dateByApp = new Map<string, string>();
+        const infoByApp = new Map<string, AppInfo>();
         for (const a of Array.isArray(apps) ? apps : []) {
-          if (a.신청번호 && a.신청일자) dateByApp.set(a.신청번호, a.신청일자);
+          if (a.신청번호) infoByApp.set(a.신청번호, { 신청일자: a.신청일자, 신청자: a.신청자, 연락처: a.연락처 });
         }
-        setSlots(groupSchedules(Array.isArray(rows) ? rows : [], dateByApp));
+        setSlots(groupSchedules(Array.isArray(rows) ? rows : [], infoByApp));
       } catch (e) {
         setError(String(e));
       } finally {
