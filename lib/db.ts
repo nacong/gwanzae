@@ -1,4 +1,5 @@
 // 품목명 → 필요 인원 수 Mock DB (localStorage 기반)
+import { getStoredToken } from "@/lib/auth";
 const DB_KEY = "gwanzae-personnel-db";
 
 export type PersonnelDB = Record<string, number>;
@@ -31,6 +32,17 @@ export function savePersonnel(itemName: string, count: number): void {
 // ─── Products API ────────────────────────────────────────────────────────────
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
+
+function apiHeaders(json = false): HeadersInit {
+  const result: Record<string, string> = { "X-API-Key": API_KEY };
+  if (typeof window !== "undefined") {
+    const token = getStoredToken();
+    if (token) result.Authorization = `Bearer ${token}`;
+  }
+  if (json) result["Content-Type"] = "application/json";
+  return result;
+}
 
 export type Product = {
   품명: string;
@@ -43,7 +55,7 @@ export type ProductUpdate = {
 };
 
 export async function fetchProducts(skip = 0, limit = 100): Promise<Product[]> {
-  const res = await fetch(`${API_BASE}/products?skip=${skip}&limit=${limit}`);
+  const res = await fetch(`${API_BASE}/products?skip=${skip}&limit=${limit}`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(`GET /products failed: ${res.status}`);
   return res.json();
 }
@@ -51,7 +63,8 @@ export async function fetchProducts(skip = 0, limit = 100): Promise<Product[]> {
 /** 특정 품명의 필요 인원 정보 조회 */
 export async function fetchWorkers(품명: string): Promise<unknown> {
   const res = await fetch(
-    `${API_BASE}/products/workers?${new URLSearchParams({ 품명 })}`
+    `${API_BASE}/products/workers?${new URLSearchParams({ 품명 })}`,
+    { headers: apiHeaders() },
   );
   if (!res.ok) throw new Error(`GET /products/workers failed: ${res.status}`);
   return res.json();
@@ -60,7 +73,7 @@ export async function fetchWorkers(품명: string): Promise<unknown> {
 export async function createProduct(product: Product): Promise<unknown> {
   const res = await fetch(`${API_BASE}/products`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(true),
     body: JSON.stringify(product),
   });
   if (!res.ok) throw new Error(`POST /products failed: ${res.status}`);
@@ -74,7 +87,7 @@ export async function updateProduct(
 ): Promise<unknown> {
   const res = await fetch(`${API_BASE}/products/${encodeURIComponent(name)}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(true),
     body: JSON.stringify(update),
   });
   if (!res.ok) throw new Error(`PATCH /products/${name} failed: ${res.status}`);
@@ -84,7 +97,7 @@ export async function updateProduct(
 export async function importProductsFromS3(s3Key: string): Promise<unknown> {
   const res = await fetch(`${API_BASE}/products/import`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(true),
     body: JSON.stringify({ s3_key: s3Key }),
   });
   if (!res.ok) throw new Error(`POST /products/import failed: ${res.status}`);
@@ -109,7 +122,7 @@ export type RouteRequest = {
 export async function optimizeRoute(req: RouteRequest): Promise<unknown> {
   const res = await fetch(`${API_BASE}/optimize/route`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(true),
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`POST /optimize/route failed: ${res.status}`);

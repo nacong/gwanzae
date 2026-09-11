@@ -151,40 +151,6 @@ function ApplicationDetail({ app, onClose }: { app: Application; onClose: () => 
   );
 }
 
-/* ─── 여러 장의 사진을 한 장으로 합치기 (OCR API는 파일 1개만 받음) ─── */
-
-function loadImage(file: File): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = URL.createObjectURL(file);
-  });
-}
-
-async function mergeImagesVertically(files: File[]): Promise<File> {
-  if (files.length === 1) return files[0];
-  const imgs = await Promise.all(files.map(loadImage));
-  const width = Math.max(...imgs.map((i) => i.naturalWidth));
-  const height = imgs.reduce((sum, i) => sum + i.naturalHeight * (width / i.naturalWidth), 0);
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d")!;
-  let y = 0;
-  for (const img of imgs) {
-    const h = img.naturalHeight * (width / img.naturalWidth);
-    ctx.drawImage(img, 0, y, width, h);
-    y += h;
-  }
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (!blob) { reject(new Error("이미지 합치기에 실패했습니다.")); return; }
-      resolve(new File([blob], "merged.jpg", { type: "image/jpeg" }));
-    }, "image/jpeg", 0.92);
-  });
-}
-
 /* ─── 스캔 모션 (기본정보 인식 중) ────────────────────────────── */
 
 const SCAN_MS = 1800;
@@ -276,15 +242,6 @@ function extractErrorDetail(message: string): string {
   return message;
 }
 
-function pickCreatedApp(result: unknown, rows: Application[]): Application | null {
-  if (result && typeof result === "object" && typeof (result as { id?: unknown }).id === "number") {
-    const match = rows.find((a) => a.id === (result as { id: number }).id);
-    if (match) return match;
-  }
-  if (rows.length === 0) return null;
-  return rows.reduce((max, a) => (a.id > max.id ? a : max), rows[0]);
-}
-
 function Field({ label, value, onChange, type = "text" }: {
   label: string; value: string; onChange: (v: string) => void; type?: string;
 }) {
@@ -367,7 +324,10 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
 
   function removePhoto(idx: number) {
     setFiles((prev) => prev.filter((_, i) => i !== idx));
-    setPreviews((prev) => prev.filter((_, i) => i !== idx));
+    setPreviews((prev) => {
+      URL.revokeObjectURL(prev[idx]);
+      return prev.filter((_, i) => i !== idx);
+    });
   }
 
   async function startRecognition() {
@@ -375,11 +335,9 @@ function AddApplicationWizard({ initialFiles, onClose, onDone }: {
     setStep("scanning");
     setError(null);
     try {
-      const merged = await mergeImagesVertically(files);
-      const result = await createApplicationFromOcr(merged);
-      const rows = await listApplications();
-      const created = pickCreatedApp(result, Array.isArray(rows) ? rows : []);
-      if (!created) throw new Error("등록된 신청서를 찾을 수 없습니다.");
+      // 백엔드는 같은 multipart `file` 필드를 반복해서 받아 한 신청서로 처리한다.
+      // 원본 이미지를 합치거나 재압축하지 않아 OCR 해상도와 페이지 경계를 보존한다.
+      const created = await createApplicationFromOcr(files);
       setAppId(created.id);
       set신청부서(created.신청부서 ?? "");
       set신청번호(created.신청번호 ?? "");

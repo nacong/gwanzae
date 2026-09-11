@@ -3,14 +3,17 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
-import { ArrowLeft, Phone, MoreVertical, Camera, X, ImageIcon, Upload, PartyPopper, Home, MapPin } from "lucide-react";
+import { ArrowLeft, Phone, MoreVertical, Camera, X, ImageIcon, Upload, PartyPopper, Home, MapPin, CarFront, Timer } from "lucide-react";
 import {
-  listApplications, completeApplication, scheduleNavigation, assetUrl,
-  type NavFloor, type NavigationResponse,
+  listApplications, completeApplication, scheduleNavigation, schedulesToday, assetUrl, createWorkSession, predictFatigueAfterWork,
+  getNavigationProgress, updateNavigationProgress,
+  type FatiguePrediction, type NavFloor, type NavigationResponse,
 } from "@/lib/api";
+import { getStoredAuthUser, type AuthUser } from "@/lib/auth";
+import { useWebWorkTracker, type WorkTrackingSnapshot } from "@/lib/work-tracker";
 
 /* 이 화면의 navigation 소비는 스텝 단위 응답을 전제로 한다:
-   nav.steps[] = 각 패널(이동/수거). guide_text·floor_label 는 서버가 완성해 준다.
+   nav.steps[] = 각 패널(이동/수거). guide_text·floor_label 는 서버가 완성해 준다. */
 
 /* ─── 데이터 모델 ─────────────────────────────────────────────
    /today 에서 넘겨준 출동 계획(정류장/신청서 카드 + 대표 일정 id)을 읽어,
@@ -29,7 +32,13 @@ interface DispatchStop {
   scheduleId?: number;
   items?: DispatchItem[];
 }
-interface DispatchPlan { 출동일시: string; stops: DispatchStop[]; }
+interface DispatchPlan {
+  출동일시: string;
+  viewerRole?: "admin" | "worker";
+  workerNames?: string[];
+  workerName?: string;
+  stops: DispatchStop[];
+}
 interface DispatchBuilding { 건물명: string; scheduleId: number; items: DispatchItem[]; }
 
 const CSS_ANIM = `@keyframes dispatchDraw { to { stroke-dashoffset: 0; } }`;
@@ -577,24 +586,39 @@ function ExitConfirmDialog({ onCancel, onConfirm }: { onCancel: () => void; onCo
 
 /* ─── 하단 안내/버튼 바 ───────────────────────────────────── */
 
-function GuideBar({ guide, isLast, primaryLabel, primaryIcon, onPrev, onPrimary }: {
+function GuideBar({ guide, isLast, primaryLabel, primaryIcon, onPrev, onPrimary, following = false, followerAction = false }: {
   guide: string; isLast: boolean; primaryLabel: string;
   primaryIcon?: React.ReactNode; onPrev: () => void; onPrimary: () => void;
+  following?: boolean; followerAction?: boolean;
 }) {
   return (
     <div className="fixed inset-x-0 bottom-0 z-30 flex flex-col gap-4 bg-[#f2f4f7] px-5 pt-4 pb-safe-bottom">
       <p className="text-2xl font-bold leading-snug text-[#111827]">{guide}</p>
-      <div className="flex items-stretch gap-3">
-        <button onClick={onPrev}
-          className="flex h-[52px] w-[100px] items-center justify-center rounded-xl border border-[#e5e7eb] bg-white text-base font-semibold text-[#111827]">
-          이전
-        </button>
-        <button onClick={onPrimary}
-          className="flex h-[52px] flex-1 items-center justify-center gap-2 rounded-xl bg-[#0043ff] text-base font-semibold text-white">
-          {primaryIcon}
-          {isLast ? "수거 완료" : primaryLabel}
-        </button>
-      </div>
+      {following ? (
+        followerAction ? (
+          <button onClick={onPrimary}
+            className="flex h-[52px] w-full items-center justify-center gap-2 rounded-xl bg-[#0043ff] text-base font-semibold text-white">
+            {primaryIcon}
+            {isLast ? "수거 완료" : primaryLabel}
+          </button>
+        ) : (
+          <div className="flex h-[52px] w-full items-center justify-center rounded-xl border border-[#bfd0ff] bg-white text-sm font-bold text-[#0043ff]">
+            관리자 길안내를 따라가는 중
+          </div>
+        )
+      ) : (
+        <div className="flex items-stretch gap-3">
+          <button onClick={onPrev}
+            className="flex h-[52px] w-[100px] items-center justify-center rounded-xl border border-[#e5e7eb] bg-white text-base font-semibold text-[#111827]">
+            이전
+          </button>
+          <button onClick={onPrimary}
+            className="flex h-[52px] flex-1 items-center justify-center gap-2 rounded-xl bg-[#0043ff] text-base font-semibold text-white">
+            {primaryIcon}
+            {isLast ? "수거 완료" : primaryLabel}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -683,9 +707,95 @@ function PhotoUploadSheet({ room, onClose, onDone }: {
   );
 }
 
+/* ─── 작업시간 / Borg ─────────────────────────────────────── */
+
+function durationLabel(seconds: number | null): string {
+  if (seconds == null) return "측정 불가";
+  const mins = Math.max(0, Math.round(seconds / 60));
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return h > 0 ? `${h}시간 ${m}분` : `${m}분`;
+}
+
+function TrackingStatus({ tracking }: { tracking: WorkTrackingSnapshot }) {
+  const driving = tracking.phase === "driving";
+  const working = tracking.phase === "working";
+  return (
+    <div className="pointer-events-none fixed right-4 top-[calc(64px+env(safe-area-inset-top))] z-40 flex items-center gap-2 rounded-full border border-white/70 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+      {driving ? <CarFront size={16} className="text-[#0043ff]" /> : <Timer size={16} className={working ? "text-[#16a34a]" : "text-[#64748b]"} />}
+      <div className="text-right leading-tight">
+        <p className="text-[11px] font-bold text-[#334155]">{tracking.message}</p>
+        <p className="text-[10px] text-[#64748b]">
+          {tracking.workSeconds == null ? "작업구간 탐색 중" : `작업 ${durationLabel(tracking.workSeconds)}`}
+          {tracking.lastSpeedKmh != null ? ` · ${tracking.lastSpeedKmh.toFixed(1)}km/h` : ""}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function FatiguePrompt({ workerName, saving, onAnswer }: {
+  workerName: string;
+  saving: boolean;
+  onAnswer: (borg: number | null) => void;
+}) {
+  return (
+    <div className="font-pretendard fixed inset-0 z-50 flex flex-col bg-[#f2f4f7] px-6 pb-[calc(32px+env(safe-area-inset-bottom))] pt-[calc(48px+env(safe-area-inset-top))]">
+      <div className="flex flex-1 flex-col justify-center">
+        <p className="text-sm font-bold text-[#0043ff]">{workerName}님의 개인 작업 기록</p>
+        <h1 className="mt-3 text-[28px] font-extrabold leading-tight text-[#111827]">
+          이번 수거 후 느끼는<br />전신 피로도는 어느 정도인가요?
+        </h1>
+        <p className="mt-3 text-sm leading-relaxed text-[#64748b]">
+          Borg CR10 기준입니다. 숫자를 한 번 누르면 바로 저장됩니다.
+        </p>
+
+        <div className="mt-8 grid grid-cols-6 gap-2.5">
+          {Array.from({ length: 11 }, (_, score) => (
+            <button
+              key={score}
+              type="button"
+              disabled={saving}
+              onClick={() => onAnswer(score)}
+              className={`flex aspect-square items-center justify-center rounded-2xl text-xl font-extrabold transition active:scale-95 disabled:opacity-50 ${
+                score >= 8 ? "bg-[#fee2e2] text-[#dc2626]"
+                  : score >= 5 ? "bg-[#fef3c7] text-[#b45309]"
+                    : "bg-white text-[#1e293b]"
+              }`}
+            >
+              {score}
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 flex justify-between px-1 text-xs font-semibold text-[#94a3b8]">
+          <span>0 · 전혀 없음</span>
+          <span>10 · 극도로 심함</span>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        disabled={saving}
+        onClick={() => onAnswer(null)}
+        className="h-12 w-full rounded-xl text-sm font-semibold text-[#64748b] disabled:opacity-50"
+      >
+        {saving ? "작업 기록 저장 중…" : "이번에는 건너뛰기"}
+      </button>
+    </div>
+  );
+}
+
 /* ─── 전체 완료 화면 ──────────────────────────────────────── */
 
-function CompletionScreen({ count, elapsed, onHome }: { count: number; elapsed: string; onHome: () => void; }) {
+function CompletionScreen({ count, elapsed, workElapsed, teamWorkers, recordedWorkerName, borg, predictedBorg, onHome }: {
+  count: number;
+  elapsed: string;
+  workElapsed: string;
+  teamWorkers: string[];
+  recordedWorkerName: string;
+  borg: number | null;
+  predictedBorg: number | null;
+  onHome: () => void;
+}) {
   return (
     <div className="font-pretendard fixed inset-0 flex flex-col items-center justify-center bg-[#f2f4f7] p-10">
       <div className="flex w-full flex-col items-center gap-8">
@@ -702,6 +812,20 @@ function CompletionScreen({ count, elapsed, onHome }: { count: number; elapsed: 
           <div className="flex items-center justify-between">
             <p className="text-[#9ca3af]">총 소요시간</p>
             <p className="font-bold text-black">{elapsed}</p>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-[#9ca3af]">추정 작업시간</p>
+            <p className="font-bold text-black">{workElapsed}</p>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-[#9ca3af]">참여 작업자</p>
+            <p className="font-bold text-black">{teamWorkers.length}명</p>
+          </div>
+          <div className="flex items-center justify-between border-t border-[#f1f5f9] pt-3">
+            <p className="text-[#64748b]">{recordedWorkerName} · {borg == null && predictedBorg != null ? "모델 예상 Borg" : "내 Borg"}</p>
+            <p className="font-bold text-black">
+              {borg != null ? `${borg}/10` : predictedBorg != null ? `${predictedBorg.toFixed(1)}/10` : "미응답"}
+            </p>
           </div>
         </div>
       </div>
@@ -783,8 +907,9 @@ function OverviewStop({ stop, isLast, state, dotBlue, lineBlue }: {
   );
 }
 
-function OverviewScreen({ plan, currentIdx, onBack, onStart, onSkip }: {
+function OverviewScreen({ plan, currentIdx, onBack, onStart, onSkip, following = false }: {
   plan: DispatchPlan; currentIdx: number; onBack: () => void; onStart: () => void; onSkip: () => void;
+  following?: boolean;
 }) {
   const { title, range } = slotLabel(plan.출동일시);
   // 현재 진행 중인 건물 정류장(currentIdx)을 기준으로 지나간/현재/이후를 표시한다.
@@ -819,14 +944,22 @@ function OverviewScreen({ plan, currentIdx, onBack, onStart, onSkip }: {
       </div>
 
       <div className="fixed inset-x-0 bottom-0 flex items-center gap-2 bg-[#f2f4f7] px-4 pb-safe-bottom pt-3">
-        <button onClick={onSkip}
-          className="flex h-[52px] items-center justify-center rounded-xl bg-white px-5 text-lg font-semibold text-[#111827]">
-          건너뛰기
-        </button>
-        <button onClick={onStart}
-          className="flex h-[52px] flex-1 items-center justify-center rounded-xl bg-[#0043ff] text-lg font-semibold text-white">
-          길안내
-        </button>
+        {following ? (
+          <div className="flex h-[52px] w-full items-center justify-center rounded-xl border border-[#bfd0ff] bg-white text-sm font-bold text-[#0043ff]">
+            관리자 화면과 동기화 중
+          </div>
+        ) : (
+          <>
+            <button onClick={onSkip}
+              className="flex h-[52px] items-center justify-center rounded-xl bg-white px-5 text-lg font-semibold text-[#111827]">
+              건너뛰기
+            </button>
+            <button onClick={onStart}
+              className="flex h-[52px] flex-1 items-center justify-center rounded-xl bg-[#0043ff] text-lg font-semibold text-white">
+              길안내
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -920,16 +1053,41 @@ export default function DispatchPage() {
   const [photoOpen, setPhotoOpen] = useState(false);
   const [exitOpen, setExitOpen] = useState(false);
   const [done, setDone] = useState(false);
-  const startRef = useRef<number>(Date.now());
+  const [dispatchStartedAt, setDispatchStartedAt] = useState<number | null>(null);
+  const [completionTracking, setCompletionTracking] = useState<WorkTrackingSnapshot | null>(null);
+  const [fatigueOpen, setFatigueOpen] = useState(false);
+  const [savingSession, setSavingSession] = useState(false);
+  const [reportedBorg, setReportedBorg] = useState<number | null>(null);
+  const [fatiguePrediction, setFatiguePrediction] = useState<FatiguePrediction | null>(null);
+  const [loggedInUser, setLoggedInUser] = useState<AuthUser | null>(null);
+  const [finishing, setFinishing] = useState(false);
+  const lastPublishedNavigationRef = useRef<string | null>(null);
+  const lastAppliedNavigationRevisionRef = useRef(-1);
+  const { snapshot: tracking, stop: stopTracking } = useWebWorkTracker(dispatchStartedAt);
+  const dispatchWorkers = useMemo(() => {
+    const workers = plan?.workerNames?.map((name) => name.trim()).filter(Boolean) ?? [];
+    if (workers.length > 0) return Array.from(new Set(workers));
+    if (plan?.workerName?.trim()) return [plan.workerName.trim()];
+    return ["미지정 작업자"];
+  }, [plan]);
+  // 화면 모드는 localStorage 계획값이 아니라 검증된 로그인 계정의 역할로 결정한다.
+  const isAdminViewer = loggedInUser?.role === "admin";
+  const homePath = isAdminViewer ? "/admin" : "/today";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const transformRef = useRef<any>(null);
 
   useEffect(() => {
+    const storedUser = getStoredAuthUser();
+    setLoggedInUser(storedUser);
+    if (storedUser?.role === "worker") {
+      const storedStart = Number(sessionStorage.getItem("gwanzae-dispatch-started-at"));
+      setDispatchStartedAt(Number.isFinite(storedStart) && storedStart > 0 ? storedStart : Date.now());
+    }
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        const saved = localStorage.getItem("gwanzae-dispatch-plan");
+        const saved = sessionStorage.getItem("gwanzae-dispatch-plan");
         if (!saved) throw new Error("출동 정보가 없습니다. 오늘 화면에서 출동을 눌러 다시 시작해주세요.");
         let p: DispatchPlan;
         try { p = JSON.parse(saved); } catch { throw new Error("저장된 출동 정보를 읽지 못했습니다."); }
@@ -937,6 +1095,21 @@ export default function DispatchPage() {
           .filter((s) => s.kind === "building" && s.scheduleId != null)
           .map((s) => ({ 건물명: s.건물명, scheduleId: s.scheduleId!, items: s.items ?? [] }));
         if (list.length === 0) throw new Error("출동할 건물이 없습니다.");
+
+        // 최적화를 다시 실행하면 서버가 기존 schedule 행을 삭제하고 새 ID를 만든다.
+        // 브라우저에 남은 이전 계획으로 navigation을 호출하기 전에 현재 일정과 대조한다.
+        const currentSchedules = await schedulesToday();
+        const currentScheduleIds = new Set(currentSchedules.map((schedule) => schedule.id));
+        const staleScheduleIds = list
+          .map((building) => building.scheduleId)
+          .filter((scheduleId) => !currentScheduleIds.has(scheduleId));
+        if (staleScheduleIds.length > 0) {
+          sessionStorage.removeItem("gwanzae-dispatch-plan");
+          sessionStorage.removeItem("gwanzae-dispatch-apps");
+          sessionStorage.removeItem("gwanzae-dispatch-started-at");
+          sessionStorage.removeItem("gwanzae-dispatch-session-id");
+          throw new Error("이전 출동 계획이 만료되었습니다. 오늘 화면에서 최신 일정을 다시 선택해주세요.");
+        }
         setPlan(p);
         setBuildings(list);
 
@@ -974,6 +1147,69 @@ export default function DispatchPage() {
     return ranges;
   }, [steps]);
 
+  // 관리자 화면의 현재 건물/스텝을 서버에 기록한다. 빠른 연속 클릭은 마지막 상태만 전송한다.
+  useEffect(() => {
+    const activeScheduleId = buildings?.[buildingIdx]?.scheduleId;
+    if (!isAdminViewer || !plan || !activeScheduleId || loading) return;
+    const signature = `${plan.출동일시}|${phase}|${activeScheduleId}|${stepIdx}`;
+    if (lastPublishedNavigationRef.current === signature) return;
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void updateNavigationProgress({
+        dispatch_time: plan.출동일시,
+        phase,
+        active_schedule_id: activeScheduleId,
+        step_index: stepIdx,
+      }).then(() => {
+        if (!cancelled) lastPublishedNavigationRef.current = signature;
+      }).catch((syncError) => {
+        console.warn("[dispatch] 관리자 네비게이션 상태 공유 실패", syncError);
+      });
+    }, 120);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [buildings, buildingIdx, isAdminViewer, loading, phase, plan, stepIdx]);
+
+  // 작업자 화면은 관리자 진행 상태를 읽어 같은 건물과 안내 스텝을 표시한다.
+  useEffect(() => {
+    if (loggedInUser?.role !== "worker" || !plan || !buildings || steps.length === 0) return;
+    let active = true;
+    let timer: number | null = null;
+    const applyAdminProgress = async () => {
+      try {
+        const progress = await getNavigationProgress(plan.출동일시);
+        if (!active || progress.revision <= lastAppliedNavigationRevisionRef.current) return;
+        const nextBuildingIdx = buildings.findIndex((building) => building.scheduleId === progress.active_schedule_id);
+        if (nextBuildingIdx < 0) return;
+        lastAppliedNavigationRevisionRef.current = progress.revision;
+        setBuildingIdx(nextBuildingIdx);
+        setPhotoOpen(false);
+        setPhase(progress.phase);
+        if (progress.phase === "nav") {
+          const range = buildingRanges[nextBuildingIdx];
+          const nextStep = range
+            ? Math.min(range.end, Math.max(range.start, progress.step_index))
+            : progress.step_index;
+          setStepIdx(nextStep);
+          setAnimKey((key) => key + 1);
+        }
+      } catch (syncError) {
+        console.warn("[dispatch] 관리자 네비게이션 상태 확인 실패", syncError);
+      } finally {
+        // 느린 네트워크에서도 요청이 중첩되지 않도록 이전 응답 뒤에 다음 조회를 예약한다.
+        if (active) timer = window.setTimeout(() => { void applyAdminProgress(); }, 1_000);
+      }
+    };
+    void applyAdminProgress();
+    return () => {
+      active = false;
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, [buildingRanges, buildings, loggedInUser?.role, plan, steps.length]);
+
   if (loading) {
     return (
       <div style={{
@@ -1006,7 +1242,7 @@ export default function DispatchPage() {
             fontSize: 12, color: "#c00", fontFamily: "monospace", wordBreak: "break-all", whiteSpace: "pre-wrap", marginBottom: 12,
           }}>{error}</pre>
         )}
-        <button onClick={() => router.push("/today")}
+        <button onClick={() => router.push(homePath)}
           style={{ marginTop: 8, padding: "12px 28px", borderRadius: 12, border: "none", background: "#111", color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>
           오늘 화면으로
         </button>
@@ -1028,8 +1264,12 @@ export default function DispatchPage() {
     };
     const currentStopIdx = buildingStopIdxs[buildingIdx] ?? plan.stops.findIndex((s) => s.kind === "building");
     return (
-      <OverviewScreen plan={plan} currentIdx={currentStopIdx}
-        onBack={() => router.push("/today")} onStart={startNav} onSkip={startNav} />
+      <>
+        <OverviewScreen plan={plan} currentIdx={currentStopIdx}
+          onBack={() => router.push(homePath)} onStart={startNav} onSkip={startNav}
+          following={!isAdminViewer} />
+        {!isAdminViewer && <TrackingStatus tracking={tracking} />}
+      </>
     );
   }
 
@@ -1078,8 +1318,19 @@ export default function DispatchPage() {
   }
 
   async function finish() {
+    if (finishing) return;
+    setFinishing(true);
+    if (isAdminViewer) {
+      stopTracking();
+      sessionStorage.removeItem("gwanzae-dispatch-plan");
+      sessionStorage.removeItem("gwanzae-dispatch-apps");
+      router.push("/admin");
+      return;
+    }
+    const finalTracking = stopTracking();
+    setCompletionTracking(finalTracking);
     try {
-      const rawApps = localStorage.getItem("gwanzae-dispatch-apps");
+      const rawApps = sessionStorage.getItem("gwanzae-dispatch-apps");
       const appNumbers: string[] = rawApps ? JSON.parse(rawApps) : [];
       if (appNumbers.length > 0) {
         const all = await listApplications();
@@ -1088,20 +1339,119 @@ export default function DispatchPage() {
       }
     } catch { /* 완료 처리 실패해도 완료 화면은 보여준다 */ }
 
-    localStorage.removeItem("gwanzae-dispatch-plan");
-    localStorage.removeItem("gwanzae-dispatch-apps");
-    setDone(true);
+    try {
+      const prediction = await predictFatigueAfterWork({
+        schedule_ids: buildings?.map((building) => building.scheduleId) ?? [],
+        total_seconds: finalTracking.totalSeconds,
+        work_seconds: finalTracking.workSeconds,
+        driving_seconds: finalTracking.drivingSeconds,
+        unknown_seconds: finalTracking.unknownSeconds,
+        team_size: dispatchWorkers.length,
+      });
+      setFatiguePrediction(prediction);
+      if (!prediction.survey_required && prediction.predicted_borg_cr10 != null) {
+        await savePersonalFatigue(null, finalTracking);
+        setFinishing(false);
+        return;
+      }
+    } catch (predictionError) {
+      console.warn("[dispatch] 개인 피로도 예측 실패, 실제 Borg 설문을 유지합니다.", predictionError);
+    }
+    setFatigueOpen(true);
+    setFinishing(false);
   }
 
-  function elapsedLabel() {
-    const mins = Math.max(1, Math.round((Date.now() - startRef.current) / 60000));
-    const h = Math.floor(mins / 60), m = mins % 60;
-    return h > 0 ? `${h}시간 ${m}분` : `${m}분`;
+  async function savePersonalFatigue(borg: number | null, trackingOverride?: WorkTrackingSnapshot) {
+    const activeTracking = trackingOverride ?? completionTracking;
+    if (!activeTracking || savingSession) return;
+    setSavingSession(true);
+    const rawApps = sessionStorage.getItem("gwanzae-dispatch-apps");
+    let applicationNumbers: string[] = [];
+    try { applicationNumbers = rawApps ? JSON.parse(rawApps) : []; } catch { /* 빈 배열로 저장 */ }
+
+    const existingSessionId = sessionStorage.getItem("gwanzae-dispatch-session-id");
+    const clientSessionId = existingSessionId
+      ?? (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `dispatch-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const startedAt = activeTracking.startedAt ?? dispatchStartedAt ?? Date.now();
+    const completedAt = activeTracking.completedAt ?? Date.now();
+    const workerName = loggedInUser?.full_name ?? "로그인 작업자";
+    const payload = {
+      client_session_id: clientSessionId,
+      worker_name: workerName,
+      schedule_ids: buildings?.map((building) => building.scheduleId) ?? [],
+      application_numbers: applicationNumbers,
+      started_at: new Date(startedAt).toISOString(),
+      completed_at: new Date(completedAt).toISOString(),
+      total_seconds: activeTracking.totalSeconds,
+      work_seconds: activeTracking.workSeconds,
+      driving_seconds: activeTracking.drivingSeconds,
+      unknown_seconds: activeTracking.unknownSeconds,
+      gps_sample_count: activeTracking.sampleCount,
+      gps_rejected_count: activeTracking.rejectedCount,
+      tracking_quality: activeTracking.quality,
+      borg_cr10: borg,
+      team_size: dispatchWorkers.length,
+    };
+
+    try {
+      const savedSession = await createWorkSession(payload);
+      if (savedSession.predicted_borg_cr10 != null) {
+        setFatiguePrediction((current) => current ?? {
+          predicted_borg_cr10: savedSession.predicted_borg_cr10,
+          prediction_confidence: savedSession.prediction_confidence ?? "low",
+          prediction_source: "stored_initial",
+          actual_response_count: 0,
+          validation_count: 0,
+          validation_mae: savedSession.prediction_validation_mae,
+          model_ready: false,
+          survey_required: borg != null,
+        });
+      }
+    } catch (saveError) {
+      console.warn("[dispatch] 작업 기록 서버 저장 실패, 로컬 대기열에 보관", saveError);
+      try {
+        const rawPending = localStorage.getItem("gwanzae-pending-work-sessions");
+        const pending = rawPending ? JSON.parse(rawPending) : [];
+        localStorage.setItem("gwanzae-pending-work-sessions", JSON.stringify([...pending, payload]));
+      } catch { /* 로컬 저장도 실패해도 완료 흐름은 막지 않는다 */ }
+    }
+
+    setReportedBorg(borg);
+    sessionStorage.removeItem("gwanzae-dispatch-plan");
+    sessionStorage.removeItem("gwanzae-dispatch-apps");
+    sessionStorage.removeItem("gwanzae-dispatch-started-at");
+    sessionStorage.removeItem("gwanzae-dispatch-session-id");
+    setFatigueOpen(false);
+    setDone(true);
+    setSavingSession(false);
+  }
+
+  if (fatigueOpen && completionTracking) {
+    return (
+      <FatiguePrompt
+        workerName={loggedInUser?.full_name ?? "작업자"}
+        saving={savingSession}
+        onAnswer={savePersonalFatigue}
+      />
+    );
   }
 
   if (done) {
     const pickupCount = steps.filter((s) => s.kind === "pickup").length;
-    return <CompletionScreen count={pickupCount} elapsed={elapsedLabel()} onHome={() => router.push("/today")} />;
+    return (
+      <CompletionScreen
+        count={pickupCount}
+        elapsed={durationLabel(completionTracking?.totalSeconds ?? tracking.totalSeconds)}
+        workElapsed={durationLabel(completionTracking?.workSeconds ?? null)}
+        teamWorkers={dispatchWorkers}
+        recordedWorkerName={loggedInUser?.full_name ?? "로그인 작업자"}
+        borg={reportedBorg}
+        predictedBorg={fatiguePrediction?.predicted_borg_cr10 ?? null}
+        onHome={() => router.push(homePath)}
+      />
+    );
   }
 
   function handlePrimary() {
@@ -1110,12 +1460,17 @@ export default function DispatchPage() {
   }
   function afterPhoto() {
     setPhotoOpen(false);
+    if (!isAdminViewer) {
+      if (isLast) finish();
+      return;
+    }
     if (isLastOfBuilding) completeBuilding(); else go(1);
   }
 
   return (
     <div className="font-pretendard fixed inset-0 overflow-hidden bg-[#f2f4f7]">
       <NavHeader title={headerTitle} contacts={contacts} onBack={() => setExitOpen(true)} />
+      {!isAdminViewer && <TrackingStatus tracking={tracking} />}
 
       {isPickup ? (
         <div className="absolute inset-x-0 overflow-y-auto px-5"
@@ -1151,6 +1506,8 @@ export default function DispatchPage() {
         primaryIcon={isPickup ? <Camera size={20} /> : undefined}
         onPrev={() => go(-1)}
         onPrimary={handlePrimary}
+        following={!isAdminViewer}
+        followerAction={isPickup}
       />
 
       {photoOpen && isPickup && (
@@ -1158,7 +1515,7 @@ export default function DispatchPage() {
       )}
 
       {exitOpen && (
-        <ExitConfirmDialog onCancel={() => setExitOpen(false)} onConfirm={() => router.push("/today")} />
+        <ExitConfirmDialog onCancel={() => setExitOpen(false)} onConfirm={() => router.push(homePath)} />
       )}
     </div>
   );

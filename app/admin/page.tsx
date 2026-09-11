@@ -1,21 +1,24 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Camera, Users, Clock, CheckCircle2, X, Loader2,
   FileText, ScanLine, Truck, MapPin, AlertCircle, Navigation,
-  Timer, ChevronRight, Package, ArrowRight, RefreshCw,
+  Timer, ChevronRight, Package, ArrowRight, RefreshCw, Activity, Sparkles, LogOut, Upload,
 } from "lucide-react";
 import {
   cn, DispatchApplication, DispatchTimeGroup,
-  getCurrentStaffStatus, StaffStatus,
+  getCurrentStaffStatus, getCurrentStaffNames, StaffStatus,
 } from "@/lib/utils";
-import { scanApplication } from "@/lib/gemini";
-import { fetchWorkers, optimizeRoute, updateProduct, createProduct } from "@/lib/db";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+import {
+  confirmStaffingRecommendation, createApplicationFromOcr, dispatchConfirm, schedulesToday,
+  optimizeRun, staffingRecommendationsToday, trainFatigueDataset, workersStatusToday,
+  updateApplication,
+  type Application, type FatigueDatasetTrainingResult, type Schedule, type StaffingProposal, type WorkerTodayStatus,
+} from "@/lib/api";
+import { clearAuth, getStoredAuthUser } from "@/lib/auth";
 
 /** 다양한 날짜 포맷을 "YYYY-MM-DD"로 통일 */
 function normalizeDate(dateStr: string): string {
@@ -32,8 +35,54 @@ function normalizeDate(dateStr: string): string {
   return dateStr;
 }
 
+type AdminTodaySlot = {
+  dispatchTime: string;
+  rows: Schedule[];
+  assignedWorkers: string[];
+  requiredPersonnel: number;
+  routeReady: boolean;
+};
+
+function scheduleBuildingName(row: Schedule): string {
+  if (row.동선?.건물명) return row.동선.건물명;
+  if (row.건물명) return row.건물명;
+  return row.설치장소?.split(/[\s\d]/)[0] || row.신청부서 || "미지정";
+}
+
+function groupAdminSchedules(rows: Schedule[]): AdminTodaySlot[] {
+  const grouped = new Map<string, Schedule[]>();
+  for (const row of rows) {
+    const key = row.출동일시 ?? "미정";
+    (grouped.get(key) ?? grouped.set(key, []).get(key)!).push(row);
+  }
+  return [...grouped.entries()].map(([dispatchTime, slotRows]) => ({
+    dispatchTime,
+    rows: slotRows,
+    assignedWorkers: Array.from(new Set(slotRows.flatMap((row) => row.배정인원 ?? []))),
+    requiredPersonnel: Math.max(
+      1,
+      ...slotRows.map((row) => Math.max(row.투입인원수 ?? 0, row.필요인원수 ?? 1)),
+    ),
+    routeReady: slotRows.every((row) => row.출동확정 === true),
+  }));
+}
+
 type ScanStep = "camera" | "scanning" | "review";
 type ScannedData = Omit<DispatchApplication, "id" | "status" | "createdAt" | "requiredPersonnel">;
+
+function toScannedData(application: Application): ScannedData {
+  return {
+    신청번호: application.신청번호 ?? "",
+    신청일자: application.신청일자 ?? "",
+    신청부서: application.신청부서 ?? "",
+    물품목록: (application.물품목록 ?? []).map((item) => ({
+      품명: item.품명 ?? "",
+      설치장소: item.설치장소 ?? "",
+      수량: item.수량 ?? 1,
+      필요인원수: item.필요인원수 ?? 0,
+    })),
+  };
+}
 
 export default function Home() {
   const router = useRouter();
@@ -47,13 +96,28 @@ export default function Home() {
   const [scanStep, setScanStep] = useState<ScanStep>("camera");
   const [scanError, setScanError] = useState<string | null>(null);
   const [scannedData, setScannedData] = useState<ScannedData | null>(null);
+  const [scannedApplicationId, setScannedApplicationId] = useState<number | null>(null);
+  const [scanSaving, setScanSaving] = useState(false);
   const [metaInput, setMetaInput] = useState({ 신청번호: "", 신청부서: "", 신청일자: "" });
   const [itemPersonnelInput, setItemPersonnelInput] = useState<Record<number, string>>({});
   const [itemNameInput, setItemNameInput] = useState<Record<number, string>>({});
   const [itemQuantityInput, setItemQuantityInput] = useState<Record<number, string>>({});
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isOptimizing, setIsOptimizing] = useState(false);
-  const [serverPersonnel, setServerPersonnel] = useState<Record<string, number>>({});
+  const [workerStatuses, setWorkerStatuses] = useState<WorkerTodayStatus[]>([]);
+  const [workerStatusLoading, setWorkerStatusLoading] = useState(true);
+  const [staffingProposals, setStaffingProposals] = useState<StaffingProposal[] | null>(null);
+  const [staffingLoading, setStaffingLoading] = useState(false);
+  const [staffingSelections, setStaffingSelections] = useState<Record<string, string[]>>({});
+  const [confirmingProposal, setConfirmingProposal] = useState<string | null>(null);
+  const [staffingMessage, setStaffingMessage] = useState<string | null>(null);
+  const [todaySchedules, setTodaySchedules] = useState<Schedule[]>([]);
+  const [todaySchedulesLoading, setTodaySchedulesLoading] = useState(true);
+  const [todaySchedulesError, setTodaySchedulesError] = useState<string | null>(null);
+  const [openingDispatch, setOpeningDispatch] = useState<string | null>(null);
+  const [fatigueDatasetTraining, setFatigueDatasetTraining] = useState(false);
+  const [fatigueDatasetResult, setFatigueDatasetResult] = useState<FatigueDatasetTrainingResult | null>(null);
+  const [fatigueDatasetError, setFatigueDatasetError] = useState<string | null>(null);
 
   // 출동 팝업
   const [dispatchPopup, setDispatchPopup] = useState<DispatchTimeGroup | null>(null);
@@ -61,11 +125,39 @@ export default function Home() {
   const [routeData, setRouteData] = useState<unknown>(null);
   const [routeError, setRouteError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const fatigueDatasetInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setMounted(true);
     const timer = setInterval(() => { setTime(new Date()); setStaff(getCurrentStaffStatus()); }, 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        setWorkerStatuses(await workersStatusToday());
+      } catch (statusError) {
+        console.warn("[admin] 작업자 상태 조회 실패", statusError);
+      } finally {
+        setWorkerStatusLoading(false);
+      }
+    })();
+  }, []);
+
+  const refreshTodaySchedules = async () => {
+    try {
+      setTodaySchedulesError(null);
+      setTodaySchedules(await schedulesToday());
+    } catch (scheduleError) {
+      setTodaySchedulesError(String(scheduleError));
+    } finally {
+      setTodaySchedulesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshTodaySchedules();
   }, []);
 
   useEffect(() => {
@@ -99,11 +191,11 @@ export default function Home() {
 
   const resetScan = () => {
     setScanStep("camera"); setScanError(null); setScannedData(null);
+    setScannedApplicationId(null); setScanSaving(false);
     setMetaInput({ 신청번호: "", 신청부서: "", 신청일자: "" });
     setItemPersonnelInput({});
     setItemNameInput({});
     setItemQuantityInput({});
-    setServerPersonnel({});
     setSelectedFiles([]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -116,57 +208,64 @@ export default function Home() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  const handleFatigueDatasetChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setFatigueDatasetTraining(true);
+    setFatigueDatasetResult(null);
+    setFatigueDatasetError(null);
+    try {
+      const result = await trainFatigueDataset(file);
+      setFatigueDatasetResult(result);
+      setWorkerStatusLoading(true);
+      try {
+        setWorkerStatuses(await workersStatusToday());
+      } catch (statusError) {
+        console.warn("[admin] 학습 후 작업자 상태 새로고침 실패", statusError);
+      }
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      const detail = raw.match(/"detail"\s*:\s*"([^"]+)"/)?.[1];
+      setFatigueDatasetError(detail ?? raw);
+    } finally {
+      setWorkerStatusLoading(false);
+      setFatigueDatasetTraining(false);
+    }
+  };
+
   const handleStartScan = async () => {
     if (selectedFiles.length === 0) return;
     setScanError(null); setScanStep("scanning");
     try {
-      // Gemini 스캔 실행
-      const data = await scanApplication(selectedFiles);
+      // OCR API가 이미지 인식과 applications 저장을 함께 처리한다.
+      const created = await createApplicationFromOcr(selectedFiles);
+      const data = toScannedData(created);
+      setScannedApplicationId(created.id);
       setScannedData(data);
       setMetaInput({ 신청번호: data.신청번호, 신청부서: data.신청부서, 신청일자: data.신청일자 });
 
-      // 품명별로 GET /products/workers 병렬 호출 → 저장된 필요인원수 우선 사용
-      const workerResults = await Promise.all(
-        data.물품목록.map(item => fetchWorkers(item.품명).catch(() => null))
-      );
-
       const inputs: Record<number, string> = {};
       const nameInputs: Record<number, string> = {};
-      const serverMap: Record<string, number> = {};
       data.물품목록.forEach((item, i) => {
-        const w = workerResults[i];
-        let stored: number | null = null;
-        if (typeof w === "number") {
-          stored = w;
-        } else if (w && typeof w === "object") {
-          const obj = w as Record<string, unknown>;
-          const val = obj["필요인원수"] ?? obj["workers"] ?? obj["count"] ?? obj["인원수"];
-          if (typeof val === "number") stored = val;
-          else if (typeof val === "string") stored = parseInt(val, 10) || null;
-        }
-        console.log(`[fetchWorkers] 품명=${item.품명}`, w, "→ stored:", stored);
-        if (stored != null && stored > 0) serverMap[item.품명] = stored;
-        inputs[i] = stored != null && stored > 0
-          ? String(stored)
-          : item.필요인원수 > 0 ? String(item.필요인원수) : "";
+        inputs[i] = item.필요인원수 > 0 ? String(item.필요인원수) : "";
         nameInputs[i] = item.품명;
       });
       const quantityInputs: Record<number, string> = {};
       data.물품목록.forEach((item, i) => { quantityInputs[i] = String(item.수량); });
-      setServerPersonnel(serverMap);
       setItemPersonnelInput(inputs);
       setItemNameInput(nameInputs);
       setItemQuantityInput(quantityInputs);
       setScanStep("review");
     } catch (err) {
-      console.error("[scanApplication error]", err);
+      console.error("[ocr api error]", err);
       setScanError(`인식 실패: ${err instanceof Error ? err.message : String(err)}`);
       setScanStep("camera");
     }
   };
 
-  const handleSaveApplication = () => {
-    if (!scannedData) return;
+  const handleSaveApplication = async () => {
+    if (!scannedData || scannedApplicationId == null || scanSaving) return;
     const updatedItems = scannedData.물품목록.map((item, i) => ({
       ...item,
       품명: (itemNameInput[i] ?? item.품명).trim() || item.품명,
@@ -174,68 +273,52 @@ export default function Home() {
       필요인원수: parseInt(itemPersonnelInput[i] ?? "", 10) || item.필요인원수,
     }));
     const requiredPersonnel = Math.max(...updatedItems.map(it => it.필요인원수), 0);
-    saveUnoptimized([...unoptimizedApps, {
-      ...scannedData,
-      ...metaInput,
-      물품목록: updatedItems,
-      id: Math.random().toString(36).substr(2, 9),
-      requiredPersonnel,
-      status: "unoptimized",
-      createdAt: Date.now(),
-    }]);
-
-    // 서버 동기화: 품목이 DB에 있으면 PATCH, 없으면 POST
-    updatedItems.forEach((item, i) => {
-      const originalName = scannedData.물품목록[i].품명;
-      const serverVal = serverPersonnel[originalName];
-
-      if (serverVal !== undefined) {
-        // DB에 있는 품목 — 이름이나 인원수가 바뀐 경우만 PATCH
-        const nameChanged = item.품명 !== originalName;
-        const personnelChanged = serverVal !== item.필요인원수;
-        if (nameChanged || personnelChanged) {
-          const patch: { 품명?: string; 필요인원수?: number } = {};
-          if (nameChanged) patch.품명 = item.품명;
-          if (personnelChanged) patch.필요인원수 = item.필요인원수;
-          updateProduct(originalName, patch).catch(err =>
-            console.error(`[updateProduct ${originalName}]`, err)
-          );
-        }
-      } else if (item.필요인원수 > 0) {
-        // DB에 없는 신규 품목 — POST로 등록
-        createProduct({ 품명: item.품명, 필요인원수: item.필요인원수 }).catch(err =>
-          console.error(`[createProduct ${item.품명}]`, err)
-        );
-      }
-    });
-
-    setScanOpen(false); resetScan();
+    setScanSaving(true);
+    setScanError(null);
+    try {
+      // 검토 화면에서 수정한 값과 점검 완료 상태를 OCR로 생성된 동일 신청서에 반영한다.
+      await updateApplication(scannedApplicationId, {
+        ...metaInput,
+        물품목록: updatedItems,
+        점검완료: true,
+      });
+      saveUnoptimized([...unoptimizedApps, {
+        ...scannedData,
+        ...metaInput,
+        물품목록: updatedItems,
+        id: String(scannedApplicationId),
+        requiredPersonnel,
+        status: "unoptimized",
+        createdAt: Date.now(),
+      }]);
+      setScanOpen(false);
+      resetScan();
+    } catch (err) {
+      setScanError(`저장 실패: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setScanSaving(false);
+    }
   };
 
   const handleOptimize = async () => {
     if (unoptimizedApps.length === 0 || isOptimizing) return;
     setIsOptimizing(true);
 
-    // 1) POST /optimize — 일정 저장
+    // 1) 인증된 POST /optimize/run — 점검 완료 신청서를 서버에서 일정으로 생성
     try {
-      const payload = unoptimizedApps.map(app => ({
-        신청번호: app.신청번호,
-        신청일자: app.신청일자,
-        신청부서: app.신청부서,
-        물품목록: app.물품목록.map(item => ({
-          품명: item.품명,
-          설치장소: item.설치장소,
-          수량: item.수량,
-          필요인원수: item.필요인원수,
-        })),
-      }));
-      await fetch(`${API_BASE}/optimize`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      await optimizeRun();
+      await refreshTodaySchedules();
+      // 재최적화는 schedule ID를 새로 만들므로 이전 출동 계획은 더 이상 유효하지 않다.
+      sessionStorage.removeItem("gwanzae-dispatch-plan");
+      sessionStorage.removeItem("gwanzae-dispatch-apps");
+      sessionStorage.removeItem("gwanzae-dispatch-started-at");
+      sessionStorage.removeItem("gwanzae-dispatch-session-id");
     } catch (err) {
-      console.error("[optimize API error]", err);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[optimize/run API error]", err);
+      setTodaySchedulesError(`일정 최적화 실패: ${message}`);
+      setIsOptimizing(false);
+      return;
     }
 
     // 2) 신청일자 기준 그룹핑
@@ -246,41 +329,22 @@ export default function Home() {
       dateMap.get(key)!.push(app);
     }
 
-    // 3) 그룹별로 POST /optimize/route → 서버 최적 동선, 실패 시 클라이언트 폴백
-    const newGroups: DispatchTimeGroup[] = await Promise.all(
-      Array.from(dateMap.entries()).map(async ([date, apps]) => {
-        const fallbackRoute = Array.from(new Set(
-          apps.flatMap(a => a.물품목록.map(i => i.설치장소.split(" ")[0]))
-        ));
-        let optimizedRoute = fallbackRoute;
-        try {
-          const routeRes = await optimizeRoute({
-            투입인원수: staff.count > 0 ? staff.count : null,
-            신청서: apps.flatMap(a => a.물품목록.map(item => ({
-              품명: item.품명,
-              설치장소: item.설치장소,
-              수량: item.수량,
-              필요인원수: item.필요인원수,
-            }))),
-          });
-          // 서버가 string[] 형태의 동선을 반환하면 사용
-          if (Array.isArray(routeRes) && routeRes.every(r => typeof r === "string")) {
-            optimizedRoute = routeRes as string[];
-          }
-        } catch (err) {
-          console.error("[optimizeRoute API error]", err);
-        }
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
-        return {
-          id: Math.random().toString(36).substr(2, 9),
-          scheduledDateTime: `${date} ${timeStr}`,
-          applications: apps,
-          isDispatched: false,
-          optimizedRoute,
-        };
-      })
-    );
+    // 3) /optimize/run이 서버 일정을 이미 생성했다. 이 로컬 그룹은 화면 표시용이며,
+    // 실제 실내 동선은 출동 확정 시 /dispatch/confirm에서 계산한다.
+    const newGroups: DispatchTimeGroup[] = Array.from(dateMap.entries()).map(([date, apps]) => {
+      const optimizedRoute = Array.from(new Set(
+        apps.flatMap(a => a.물품목록.map(i => i.설치장소.split(" ")[0]))
+      ));
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+      return {
+        id: Math.random().toString(36).substr(2, 9),
+        scheduledDateTime: `${date} ${timeStr}`,
+        applications: apps,
+        isDispatched: false,
+        optimizedRoute,
+      };
+    });
 
     saveTimeGroups([...timeGroups, ...newGroups]);
     saveUnoptimized([]);
@@ -340,6 +404,135 @@ export default function Home() {
     saveTimeGroups(updated);
   };
 
+  // 서버 프리렌더 시각대와 브라우저 시각대 차이로 생기는 hydration 불일치를 피한다.
+  const currentWorkerNames = mounted ? getCurrentStaffNames() : [];
+  const authUser = mounted ? getStoredAuthUser() : null;
+  // 서버가 조직 내 작업자만 반환하므로 관리자 이름이 고정 시간표에 있어도 섞이지 않는다.
+  const visibleWorkerNames = workerStatuses.map((status) => status.worker_name);
+  const statusByWorker = new Map(workerStatuses.map((status) => [status.worker_name, status]));
+  const serverTodaySlots = useMemo(() => groupAdminSchedules(todaySchedules), [todaySchedules]);
+
+  const openAdminDispatch = async (slot: AdminTodaySlot) => {
+    if (slot.assignedWorkers.length === 0) {
+      setStaffingMessage("먼저 해당 출동의 작업자를 배정해 주세요.");
+      document.getElementById("admin-staffing")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    setOpeningDispatch(slot.dispatchTime);
+    setTodaySchedulesError(null);
+    try {
+      if (!slot.routeReady) {
+        await dispatchConfirm(slot.assignedWorkers.length, slot.dispatchTime);
+        await refreshTodaySchedules();
+      }
+      const byBuilding = new Map<string, Schedule[]>();
+      for (const row of slot.rows) {
+        const building = scheduleBuildingName(row);
+        (byBuilding.get(building) ?? byBuilding.set(building, []).get(building)!).push(row);
+      }
+      const buildingStops = [...byBuilding.entries()].map(([building, rows]) => {
+        const byApplication = new Map<string, Schedule[]>();
+        for (const row of rows) {
+          const key = row.신청번호 ?? building;
+          (byApplication.get(key) ?? byApplication.set(key, []).get(key)!).push(row);
+        }
+        return {
+          건물명: building,
+          kind: "building" as const,
+          scheduleId: rows[0]?.id,
+          cards: [...byApplication.entries()].map(([applicationNumber, applicationRows]) => ({
+            신청번호: applicationNumber,
+            신청일자: "",
+            신청부서: applicationRows[0]?.신청부서 ?? "-",
+            itemSummary: applicationRows.length > 1
+              ? `${applicationRows[0]?.품명 ?? "품목"} 외 ${applicationRows.length - 1}건`
+              : applicationRows[0]?.품명 ?? "품목",
+          })),
+          items: rows.map((row) => ({
+            자산번호: row.자산번호 ?? "",
+            품명: row.품명 ?? "품목",
+            수량: row.수량 ?? 1,
+            설치장소: row.설치장소 ?? "",
+          })),
+        };
+      });
+      const plan = {
+        출동일시: slot.dispatchTime,
+        viewerRole: "admin",
+        workerNames: slot.assignedWorkers,
+        stops: [
+          { 건물명: "창고 출발", kind: "warehouse", cards: [] },
+          ...buildingStops,
+          { 건물명: "창고 도착", kind: "warehouse", cards: [] },
+        ],
+      };
+      sessionStorage.setItem("gwanzae-dispatch-plan", JSON.stringify(plan));
+      sessionStorage.setItem(
+        "gwanzae-dispatch-apps",
+        JSON.stringify(Array.from(new Set(slot.rows.map((row) => row.신청번호).filter(Boolean)))),
+      );
+      sessionStorage.setItem("gwanzae-worker-names", JSON.stringify(slot.assignedWorkers));
+      router.push("/dispatch");
+    } catch (dispatchError) {
+      setTodaySchedulesError(`출동 과정 준비에 실패했습니다: ${String(dispatchError)}`);
+    } finally {
+      setOpeningDispatch(null);
+    }
+  };
+
+  const loadStaffingPreview = async () => {
+    if (staffingLoading) return;
+    setStaffingLoading(true);
+    setStaffingMessage(null);
+    try {
+      const proposals = await staffingRecommendationsToday();
+      setStaffingProposals(proposals);
+      setStaffingSelections(Object.fromEntries(
+        proposals.map((proposal) => [proposal.dispatch_time, proposal.recommended_workers]),
+      ));
+    } catch (previewError) {
+      setStaffingMessage(`추천안을 불러오지 못했습니다: ${String(previewError)}`);
+    } finally {
+      setStaffingLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadStaffingPreview();
+  }, []);
+
+  const toggleStaffingWorker = (proposal: StaffingProposal, workerName: string) => {
+    setStaffingSelections((current) => {
+      const selected = current[proposal.dispatch_time] ?? proposal.recommended_workers;
+      return {
+        ...current,
+        [proposal.dispatch_time]: selected.includes(workerName)
+          ? selected.filter((name) => name !== workerName)
+          : [...selected, workerName],
+      };
+    });
+  };
+
+  const confirmStaffing = async (proposal: StaffingProposal) => {
+    const selected = staffingSelections[proposal.dispatch_time] ?? proposal.recommended_workers;
+    if (selected.length !== proposal.team_size || confirmingProposal) return;
+    setConfirmingProposal(proposal.dispatch_time);
+    setStaffingMessage(null);
+    try {
+      await confirmStaffingRecommendation(proposal, selected);
+      await dispatchConfirm(selected.length, proposal.dispatch_time);
+      setStaffingProposals((current) => current?.map((item) => (
+        item.dispatch_time === proposal.dispatch_time ? { ...item, confirmed_workers: selected } : item
+      )) ?? null);
+      await refreshTodaySchedules();
+      setStaffingMessage("인원 배정과 출동 동선을 확정했습니다. 배정된 작업자의 오늘 화면에 일정이 표시됩니다.");
+    } catch (confirmError) {
+      setStaffingMessage(`확정하지 못했습니다: ${String(confirmError)}`);
+    } finally {
+      setConfirmingProposal(null);
+    }
+  };
+
   return (
     <main className="flex-1 overflow-x-hidden pb-28 px-4 pt-safe-top">
 
@@ -352,17 +545,44 @@ export default function Home() {
             </p>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">관재 AI 출동관리</h1>
           </div>
-          <motion.div
-            initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-            className={cn(
-              "mt-1 flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-bold",
-              staff.count > 0 ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-500"
-            )}
-          >
-            <Users className="w-3.5 h-3.5" />
-            {staff.count}명 근무
-          </motion.div>
+          <div className="flex items-center gap-2">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+              className={cn(
+                "mt-1 flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-bold",
+                staff.count > 0 ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-500"
+              )}
+            >
+              <Users className="w-3.5 h-3.5" />
+              {staff.count}명 근무
+            </motion.div>
+            <button
+              type="button"
+              aria-label="로그아웃"
+              onClick={() => { clearAuth(); router.replace("/login"); }}
+              className="mt-1 flex size-9 items-center justify-center rounded-xl bg-white text-slate-500"
+            >
+              <LogOut size={17} />
+            </button>
+          </div>
         </div>
+
+        {authUser && (
+          <div className="mt-3 flex items-center justify-between rounded-xl border border-indigo-100 bg-white px-3 py-2.5">
+            <div>
+              <p className="text-[10px] font-bold text-indigo-400">관리 조직</p>
+              <p className="mt-0.5 text-sm font-bold text-slate-800">{authUser.organization_name}</p>
+            </div>
+            {authUser.organization_entry_code && (
+              <div className="text-right">
+                <p className="text-[10px] font-bold text-slate-400">작업자 입장 코드</p>
+                <p className="mt-0.5 font-mono text-base font-extrabold tracking-[0.18em] text-[#0043ff]">
+                  {authUser.organization_entry_code}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         {staff.count > 0 && (
           <p className="mt-2 text-xs text-slate-400 leading-relaxed">{staff.label}</p>
@@ -374,6 +594,294 @@ export default function Home() {
           <span className="tabular-nums font-medium">{mounted ? time.toLocaleTimeString("ko-KR") : "--:--:--"}</span>
         </div>
       </header>
+
+      {/* 서버 기준 금일 전체 출동 일정 */}
+      <section className="mb-7 rounded-2xl border border-indigo-100 bg-white p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Truck className="h-4 w-4 text-indigo-600" />
+              <h2 className="text-sm font-bold text-slate-900">금일 수거 일정</h2>
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+              관리자는 전체 일정을 확인하고 인원 배정 후 작업자와 동일한 출동 과정·네비게이션을 열 수 있습니다.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => { setTodaySchedulesLoading(true); void refreshTodaySchedules(); }}
+            className="flex shrink-0 items-center gap-1 rounded-xl bg-slate-100 px-2.5 py-2 text-[11px] font-bold text-slate-600"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${todaySchedulesLoading ? "animate-spin" : ""}`} />
+            새로고침
+          </button>
+        </div>
+
+        {todaySchedulesError && (
+          <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-600">{todaySchedulesError}</p>
+        )}
+        <div className="mt-4 space-y-3">
+          {serverTodaySlots.map((slot) => {
+            const time = new Date(slot.dispatchTime);
+            const buildings = Array.from(new Set(slot.rows.map(scheduleBuildingName)));
+            const assigned = slot.assignedWorkers.length > 0;
+            return (
+              <div key={slot.dispatchTime} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-extrabold text-slate-800">
+                      {Number.isNaN(time.getTime())
+                        ? slot.dispatchTime
+                        : time.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 출동
+                    </p>
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      {buildings.join(" → ")} · 신청 {new Set(slot.rows.map((row) => row.신청번호)).size}건 · 필요 {slot.requiredPersonnel}명
+                    </p>
+                  </div>
+                  <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${
+                    assigned ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+                  }`}>
+                    {assigned ? "배정 완료" : "배정 대기"}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {slot.assignedWorkers.map((name) => (
+                    <span key={name} className="rounded-lg bg-white px-2 py-1 text-[11px] font-bold text-indigo-700">{name}</span>
+                  ))}
+                  {!assigned && <span className="text-[11px] text-slate-400">아직 작업자가 배정되지 않았습니다.</span>}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void openAdminDispatch(slot)}
+                  disabled={openingDispatch === slot.dispatchTime}
+                  className={`mt-3 flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold ${
+                    assigned ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-600"
+                  } disabled:opacity-50`}
+                >
+                  {openingDispatch === slot.dispatchTime
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : assigned ? <Navigation className="h-4 w-4" /> : <Users className="h-4 w-4" />}
+                  {assigned ? "출동 과정·네비게이션 보기" : "인원 배정하기"}
+                </button>
+              </div>
+            );
+          })}
+          {!todaySchedulesLoading && serverTodaySlots.length === 0 && (
+            <p className="rounded-xl bg-slate-50 p-4 text-center text-xs text-slate-500">오늘 등록된 수거 일정이 없습니다.</p>
+          )}
+          {todaySchedulesLoading && serverTodaySlots.length === 0 && (
+            <div className="flex items-center justify-center gap-2 py-6 text-xs text-slate-400">
+              <Loader2 className="h-4 w-4 animate-spin" /> 일정을 불러오는 중입니다.
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* 실제 작업 기록 기반 상태와 관리자 확정형 인원 추천 */}
+      <section className="mb-7 space-y-4">
+        <div className="rounded-2xl bg-slate-900 p-4 text-white">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Activity className="h-4 w-4 text-emerald-300" />
+                <h2 className="text-sm font-bold">작업자 상태</h2>
+              </div>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+                작업 전에는 테스트 초기값 또는 최근 상태를, 출동 후에는 오늘의 실제·예측값을 보여줍니다.
+              </p>
+            </div>
+            {workerStatusLoading && <Loader2 className="h-4 w-4 animate-spin text-slate-300" />}
+          </div>
+
+          <div className="mt-4 flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-bold text-white">사전 데이터로 개인 모델 학습</p>
+              <p className="mt-1 text-[10px] leading-relaxed text-slate-400">
+                CSV·JSON·XLSX 파일을 올리면 공통 모델과 작업자별 모델을 즉시 갱신합니다.
+              </p>
+            </div>
+            <input
+              ref={fatigueDatasetInputRef}
+              type="file"
+              accept=".csv,.json,.xlsx"
+              className="hidden"
+              onChange={handleFatigueDatasetChange}
+            />
+            <button
+              type="button"
+              onClick={() => fatigueDatasetInputRef.current?.click()}
+              disabled={fatigueDatasetTraining}
+              className="flex shrink-0 items-center justify-center gap-1.5 rounded-xl bg-emerald-500 px-3 py-2 text-[11px] font-bold text-slate-950 disabled:opacity-50"
+            >
+              {fatigueDatasetTraining
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <Upload className="h-3.5 w-3.5" />}
+              {fatigueDatasetTraining ? "학습 중" : "데이터셋 선택"}
+            </button>
+          </div>
+          {fatigueDatasetResult && (
+            <p className="mt-2 rounded-lg bg-emerald-400/15 px-3 py-2 text-[10px] text-emerald-200">
+              {fatigueDatasetResult.row_count}행 학습 완료 · 개인 모델 {fatigueDatasetResult.personal_model_count}명
+              {fatigueDatasetResult.skipped_personal_models.length > 0
+                ? ` · 데이터 부족 등으로 ${fatigueDatasetResult.skipped_personal_models.length}명 제외`
+                : ""}
+            </p>
+          )}
+          {fatigueDatasetError && (
+            <p className="mt-2 rounded-lg bg-red-400/15 px-3 py-2 text-[10px] text-red-200">
+              학습 실패: {fatigueDatasetError}
+            </p>
+          )}
+
+          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {visibleWorkerNames.map((name) => {
+              const status = statusByWorker.get(name);
+              const isCurrent = currentWorkerNames.includes(name);
+              const effectiveBorg = status?.state_borg_cr10 ?? null;
+              const sourceLabel = !status ? "확인 중"
+                : status.state_source === "actual_today" ? "오늘 실제 응답"
+                  : status.state_source === "predicted_today" ? "오늘 모델 예측"
+                    : status.state_source === "last_actual" ? "최근 실제 응답"
+                      : status.state_source === "last_predicted" ? "최근 모델 예측"
+                        : status.state_source === "test_seed" ? "테스트 초기값"
+                          : status.state_source === "model_baseline" ? "모델 초기값"
+                            : "측정 전";
+              const condition = effectiveBorg == null
+                ? { label: "데이터 없음", color: "bg-white/10 text-slate-300" }
+                : effectiveBorg >= 7
+                  ? { label: "휴식 고려", color: "bg-red-400/20 text-red-200" }
+                  : effectiveBorg >= 4
+                    ? { label: "주의", color: "bg-amber-400/20 text-amber-200" }
+                    : { label: "양호", color: "bg-emerald-400/20 text-emerald-200" };
+              return (
+                <div key={name} className="rounded-xl bg-white/10 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-bold">{name}</p>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${condition.color}`}>
+                      {condition.label}{isCurrent ? " · 가용" : ""}
+                    </span>
+                  </div>
+                  {status ? (
+                    <>
+                      <div className="mt-2 grid grid-cols-4 gap-2 text-center">
+                        <div><p className="text-[10px] text-slate-400">작업</p><p className="mt-0.5 text-xs font-bold">{Math.round(status.total_work_seconds / 60)}분</p></div>
+                        <div><p className="text-[10px] text-slate-400">실제 Borg</p><p className="mt-0.5 text-xs font-bold">{status.latest_actual_borg_cr10 ?? "-"}</p></div>
+                        <div><p className="text-[10px] text-slate-400">상태 참고값</p><p className="mt-0.5 text-xs font-bold">{status.state_borg_cr10 ?? "-"}</p></div>
+                        <div><p className="text-[10px] text-slate-400">누적부하</p><p className="mt-0.5 text-xs font-bold">{status.daily_load}</p></div>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
+                        <span className="rounded-full bg-white/10 px-2 py-1 text-slate-200">{sourceLabel}</span>
+                        {status.membership_status === "roster_only" && (
+                          <span className="rounded-full bg-sky-400/15 px-2 py-1 text-sky-200">계정 가입 전</span>
+                        )}
+                      </div>
+                      <p className="mt-2 text-[10px] text-slate-400">
+                        {status.model_ready
+                          ? `개인 모델 활성 · 최근 검증 MAE ${status.validation_mae ?? "-"}`
+                          : `개인 모델 학습 중 · 실제 응답 ${status.actual_response_count}/8`}
+                        {status.state_scope === "initial" ? " · 실제 작업 후 갱신" : ""}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="mt-2 text-[11px] text-slate-400">오늘 완료된 작업 데이터가 없습니다.</p>
+                  )}
+                </div>
+              );
+            })}
+            {!workerStatusLoading && visibleWorkerNames.length === 0 && (
+              <p className="text-xs text-slate-400">조직에 등록된 작업자와 인원표가 없습니다.</p>
+            )}
+          </div>
+          <p className="mt-3 text-[10px] text-slate-400">
+            테스트 초기값은 화면과 배정 흐름을 확인하기 위한 참고값이며 실제 응답으로 계산하지 않습니다. 누적부하는 당일 실제 작업만 반영합니다.
+          </p>
+        </div>
+
+        <div id="admin-staffing" className="scroll-mt-4 rounded-2xl border border-indigo-100 bg-white p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-500" />
+                <h2 className="text-sm font-bold text-slate-900">다음 출동 인원 참고안</h2>
+              </div>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                미리보기는 일정을 바꾸지 않습니다. 관리자가 인원을 검토하고 확정해야 기록됩니다.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={loadStaffingPreview}
+              disabled={staffingLoading}
+              className="flex shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-[11px] font-bold text-white disabled:opacity-50"
+            >
+              {staffingLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              추천안 보기
+            </button>
+          </div>
+
+          {staffingProposals && (
+            <div className="mt-4 space-y-3">
+              {staffingProposals.map((proposal) => {
+                const selected = staffingSelections[proposal.dispatch_time] ?? proposal.recommended_workers;
+                const selectionValid = selected.length === proposal.team_size;
+                return (
+                  <div key={proposal.dispatch_time} className="rounded-xl bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-bold text-slate-800">
+                          {new Date(proposal.dispatch_time).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 출동
+                        </p>
+                        <p className="mt-0.5 text-[10px] text-slate-500">
+                          필요 {proposal.required_team_size}명 · 선택 {proposal.team_size}명 · 신청 {proposal.application_numbers.length}건
+                        </p>
+                        {proposal.required_team_size > proposal.team_size && (
+                          <p className="mt-1 text-[10px] font-bold text-amber-600">가용 인원이 {proposal.required_team_size - proposal.team_size}명 부족합니다.</p>
+                        )}
+                      </div>
+                      {proposal.confirmed_workers.length > 0 && (
+                        <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-bold text-emerald-700">관리자 확정</span>
+                      )}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {proposal.worker_details.map((worker) => {
+                        const checked = selected.includes(worker.worker_name);
+                        return (
+                          <button
+                            key={worker.worker_name}
+                            type="button"
+                            onClick={() => toggleStaffingWorker(proposal, worker.worker_name)}
+                            className={`rounded-xl border px-3 py-2 text-left ${checked ? "border-indigo-500 bg-indigo-50" : "border-slate-200 bg-white"}`}
+                          >
+                            <p className={`text-xs font-bold ${checked ? "text-indigo-700" : "text-slate-700"}`}>{worker.worker_name}</p>
+                            <p className="mt-0.5 text-[10px] text-slate-400">{worker.reason}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <p className={`text-[10px] ${selectionValid ? "text-slate-500" : "font-bold text-amber-600"}`}>
+                        {selected.length}/{proposal.team_size}명 선택
+                      </p>
+                      <button
+                        type="button"
+                        disabled={!selectionValid || confirmingProposal === proposal.dispatch_time}
+                        onClick={() => confirmStaffing(proposal)}
+                        className="rounded-xl bg-slate-900 px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40"
+                      >
+                        {confirmingProposal === proposal.dispatch_time ? "확정 중…" : "선택 인원 확정"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+              {staffingProposals.length === 0 && (
+                <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">오늘 남은 출동 일정이 없습니다.</p>
+              )}
+            </div>
+          )}
+          {staffingMessage && <p className="mt-3 text-[11px] leading-relaxed text-slate-600">{staffingMessage}</p>}
+        </div>
+      </section>
 
       {/* ── Section 1: 미최적화 신청서 ── */}
       {unoptimizedApps.length > 0 && (
@@ -715,7 +1223,7 @@ export default function Home() {
                     </div>
                     <div>
                       <h4 className="text-lg font-bold text-slate-800 mb-1">신청서 인식 중...</h4>
-                      <p className="text-slate-400 text-sm">Gemini Vision이 신청서를 분석하고 있습니다.</p>
+                      <p className="text-slate-400 text-sm">서버 AI OCR이 신청서를 분석하고 있습니다.</p>
                     </div>
                   </div>
                 )}
@@ -730,6 +1238,13 @@ export default function Home() {
                   });
                   return (
                     <div className="p-5 space-y-4 pb-safe-bottom">
+
+                      {scanError && (
+                        <div className="bg-red-50 text-red-600 text-sm rounded-2xl px-4 py-3 flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          {scanError}
+                        </div>
+                      )}
 
                       {/* 신청 정보 + 물품 목록 통합 카드 */}
                       <div className="bg-slate-50 rounded-2xl overflow-hidden">
@@ -815,14 +1330,15 @@ export default function Home() {
                           취소
                         </button>
                         <button
-                          onClick={handleSaveApplication}
-                          disabled={!allFilled}
+                          onClick={() => void handleSaveApplication()}
+                          disabled={!allFilled || scanSaving}
                           className={cn(
-                            "flex-[2] py-4 rounded-2xl font-bold text-sm transition-all",
-                            allFilled ? "bg-indigo-600 text-white active:bg-indigo-700" : "bg-slate-200 text-slate-400"
+                            "flex-[2] py-4 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-2",
+                            allFilled && !scanSaving ? "bg-indigo-600 text-white active:bg-indigo-700" : "bg-slate-200 text-slate-400"
                           )}
                         >
-                          저장하기
+                          {scanSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                          {scanSaving ? "저장 중..." : "저장하기"}
                         </button>
                       </div>
                     </div>

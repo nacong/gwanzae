@@ -1,5 +1,7 @@
 // API 클라이언트 — openapi.yaml (X-API-Key 인증) 기준
 
+import { clearAuth, getStoredToken } from "@/lib/auth";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
 
@@ -31,12 +33,21 @@ export function assetUrl(path?: string | null): string {
 
 function headers(json = true): HeadersInit {
   const h: Record<string, string> = { "X-API-Key": API_KEY };
+  if (typeof window !== "undefined") {
+    const token = getStoredToken();
+    if (token) h.Authorization = `Bearer ${token}`;
+  }
   if (json) h["Content-Type"] = "application/json";
   return h;
 }
 
 async function handle<T>(res: Response, label: string): Promise<T> {
   const text = await res.text();
+  const sessionUnauthorized = res.status === 401 && /로그인|인증이 만료/.test(text);
+  if (sessionUnauthorized && typeof window !== "undefined") {
+    clearAuth();
+    if (window.location.pathname !== "/login") window.location.replace("/login");
+  }
   // 실제로 요청이 나간 최종 URL(res.url)과 상태를 찍는다.
   if (res.ok) {
     console.info(`[api] ✓ ${label} → ${res.status} · ${res.url}`);
@@ -147,6 +158,8 @@ export type Schedule = {
   필요인원수?: number;
   투입인원수?: number;
   가용명단?: string;
+  배정인원?: string[];
+  배정확정?: boolean;
   출동확정?: boolean;
   동선?: RouteBuilding | null;
   건물명?: string;
@@ -195,18 +208,21 @@ export async function completeApplication(appId: number): Promise<unknown> {
 }
 
 export async function createApplicationFromOcr(
-  file: File,
+  files: File | readonly File[],
   meta: Partial<{ 신청번호: string; 신청일자: string; 신청부서: string; 신청자: string; 연락처: string }> = {},
-): Promise<unknown> {
+): Promise<Application> {
+  const uploads: readonly File[] = Array.isArray(files) ? files : [files as File];
+  if (uploads.length === 0) throw new Error("OCR로 인식할 신청서 이미지가 없습니다.");
+
   const form = new FormData();
-  form.append("file", file);
+  uploads.forEach((file) => form.append("file", file, file.name));
   Object.entries(meta).forEach(([k, v]) => { if (v) form.append(k, v); });
   const res = await fetch(`${API_BASE}/ocr/applications`, {
     method: "POST",
-    headers: { "X-API-Key": API_KEY },
+    headers: headers(false),
     body: form,
   });
-  return handle<unknown>(res, "POST /ocr/applications");
+  return handle<Application>(res, "POST /ocr/applications");
 }
 
 /* ─── 일정 / 최적화 / 출동 ───────────────────────────────────── */
@@ -234,8 +250,11 @@ export type DispatchConfirmResult = {
   슬롯별: DispatchConfirmSlot[];
 };
 
-export async function dispatchConfirm(투입인원수?: number): Promise<DispatchConfirmResult> {
-  const qs = 투입인원수 != null ? `?${new URLSearchParams({ 투입인원수: String(투입인원수) })}` : "";
+export async function dispatchConfirm(투입인원수?: number, 출동일시?: string): Promise<DispatchConfirmResult> {
+  const params = new URLSearchParams();
+  if (투입인원수 != null) params.set("투입인원수", String(투입인원수));
+  if (출동일시) params.set("출동일시", 출동일시);
+  const qs = params.size > 0 ? `?${params}` : "";
   const res = await fetch(`${API_BASE}/dispatch/confirm${qs}`, { method: "POST", headers: headers(false) });
   return handle<DispatchConfirmResult>(res, "POST /dispatch/confirm");
 }
@@ -249,6 +268,204 @@ export async function updateSchedule(scheduleId: number, patch: SchedulePatch): 
     body: JSON.stringify(patch),
   });
   return handle<unknown>(res, `PATCH /schedules/${scheduleId}`);
+}
+
+/* ─── 작업시간 / Borg / 관리자 추천 ─────────────────────────── */
+
+export type WorkSessionCreate = {
+  client_session_id: string;
+  worker_name: string;
+  schedule_ids: number[];
+  application_numbers: string[];
+  started_at: string;
+  completed_at: string;
+  total_seconds: number;
+  work_seconds: number | null;
+  driving_seconds: number;
+  unknown_seconds: number;
+  gps_sample_count: number;
+  gps_rejected_count: number;
+  tracking_quality: "unavailable" | "poor" | "estimated";
+  borg_cr10: number | null;
+  team_size?: number;
+};
+
+export type WorkSession = WorkSessionCreate & {
+  id: number;
+  user_id: number | null;
+  borg_source: "user" | "predicted" | null;
+  predicted_borg_cr10: number | null;
+  prediction_confidence: "insufficient" | "low" | "medium" | "high" | null;
+  prediction_model_version: string | null;
+  prediction_validation_mae: number | null;
+};
+
+export type FatiguePredictionInput = Pick<
+  WorkSessionCreate,
+  "schedule_ids" | "total_seconds" | "work_seconds" | "driving_seconds" | "unknown_seconds" | "team_size"
+>;
+
+export type FatiguePrediction = {
+  predicted_borg_cr10: number | null;
+  prediction_confidence: "insufficient" | "low" | "medium" | "high";
+  prediction_source: "personal_actual" | "stored_initial" | "insufficient";
+  actual_response_count: number;
+  validation_count: number;
+  validation_mae: number | null;
+  model_ready: boolean;
+  survey_required: boolean;
+};
+
+export async function predictFatigueAfterWork(body: FatiguePredictionInput): Promise<FatiguePrediction> {
+  const res = await fetch(`${API_BASE}/fatigue/predict`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(body),
+  });
+  return handle<FatiguePrediction>(res, "POST /fatigue/predict");
+}
+
+export type FatigueDatasetTrainingResult = {
+  status: "trained";
+  filename: string;
+  row_count: number;
+  global_model_id: number;
+  global_sample_count: number;
+  personal_model_count: number;
+  personal_models: Array<{
+    worker_name: string;
+    sample_count: number;
+    linked_user_id: number | null;
+  }>;
+  skipped_personal_models: Array<{
+    worker_name: string;
+    sample_count: number;
+    reason: string;
+  }>;
+  model_version: string;
+  recognized_columns: string[];
+  ignored_columns: string[];
+};
+
+export async function trainFatigueDataset(file: File): Promise<FatigueDatasetTrainingResult> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${API_BASE}/fatigue/train-dataset`, {
+    method: "POST",
+    headers: headers(false),
+    body: form,
+  });
+  return handle<FatigueDatasetTrainingResult>(res, "POST /fatigue/train-dataset");
+}
+
+export async function createWorkSession(body: WorkSessionCreate): Promise<WorkSession> {
+  const res = await fetch(`${API_BASE}/work-sessions`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(body),
+  });
+  return handle<WorkSession>(res, "POST /work-sessions");
+}
+
+export type WorkerTodayStatus = {
+  user_id: number | null;
+  worker_name: string;
+  membership_status: "joined" | "roster_only";
+  session_count: number;
+  borg_response_count: number;
+  total_work_seconds: number;
+  measured_work_session_count: number;
+  daily_load: number;
+  latest_borg_cr10: number | null;
+  latest_borg_source: "user" | "predicted" | null;
+  latest_actual_borg_cr10: number | null;
+  latest_predicted_borg_cr10: number | null;
+  prediction_confidence: "insufficient" | "low" | "medium" | "high";
+  model_ready: boolean;
+  survey_required: boolean;
+  actual_response_count: number;
+  validation_mae: number | null;
+  latest_completed_at: string | null;
+  state_borg_cr10: number | null;
+  state_source: "actual_today" | "predicted_today" | "last_actual" | "last_predicted" | "test_seed" | "model_baseline" | "unmeasured";
+  state_scope: "today" | "last_known" | "initial" | "unmeasured";
+  state_updated_at: string | null;
+  model_source: "test_seed" | "operational" | "dataset_import" | null;
+};
+
+export async function workersStatusToday(): Promise<WorkerTodayStatus[]> {
+  const res = await fetch(`${API_BASE}/workers/status/today`, { headers: headers(false) });
+  return handle<WorkerTodayStatus[]>(res, "GET /workers/status/today");
+}
+
+export type StaffingWorkerDetail = {
+  worker_name: string;
+  recommended: boolean;
+  reason: string;
+};
+
+export type StaffingProposal = {
+  dispatch_time: string;
+  schedule_ids: number[];
+  application_numbers: string[];
+  team_size: number;
+  required_team_size: number;
+  available_workers: string[];
+  recommended_workers: string[];
+  worker_details: StaffingWorkerDetail[];
+  confirmed_workers: string[];
+  basis: string;
+};
+
+export async function staffingRecommendationsToday(): Promise<StaffingProposal[]> {
+  const res = await fetch(`${API_BASE}/staffing/recommendations/today`, { headers: headers(false) });
+  return handle<StaffingProposal[]>(res, "GET /staffing/recommendations/today");
+}
+
+export async function confirmStaffingRecommendation(
+  proposal: StaffingProposal,
+  selectedWorkers: string[] = proposal.recommended_workers,
+): Promise<unknown> {
+  const res = await fetch(`${API_BASE}/staffing/recommendations/confirm`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({
+      dispatch_time: proposal.dispatch_time,
+      schedule_ids: proposal.schedule_ids,
+      selected_workers: selectedWorkers,
+    }),
+  });
+  return handle<unknown>(res, "POST /staffing/recommendations/confirm");
+}
+
+export type NavigationProgress = {
+  dispatch_time: string;
+  phase: "overview" | "nav";
+  active_schedule_id: number | null;
+  step_index: number;
+  revision: number;
+  updated_at: string | null;
+  controller_user_id: number | null;
+};
+
+export async function getNavigationProgress(dispatchTime: string): Promise<NavigationProgress> {
+  const query = new URLSearchParams({ dispatch_time: dispatchTime });
+  const res = await fetch(`${API_BASE}/navigation/progress?${query}`, { headers: headers(false) });
+  return handle<NavigationProgress>(res, "GET /navigation/progress");
+}
+
+export async function updateNavigationProgress(body: {
+  dispatch_time: string;
+  phase: "overview" | "nav";
+  active_schedule_id: number;
+  step_index: number;
+}): Promise<NavigationProgress> {
+  const res = await fetch(`${API_BASE}/navigation/progress`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify(body),
+  });
+  return handle<NavigationProgress>(res, "PUT /navigation/progress");
 }
 
 /* ─── 실내 수거 동선 (Navigation) ────────────────────────────────

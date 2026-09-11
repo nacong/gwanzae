@@ -100,6 +100,13 @@ export function getCurrentStaffNames(): string[] {
   return [];
 }
 
+/** 시간대와 무관하게 시간표에 한 번이라도 등록된 전체 작업자 목록. */
+export function getAllStaffNames(): string[] {
+  return Array.from(new Set(
+    Object.values(SCHEDULE).flatMap((slots) => slots.flatMap((slot) => slot.staff)),
+  ));
+}
+
 export const BUILDINGS = [
   "공학관", "공학실험동", "국제경영대학관", "국제학관", "글로벌관",
   "도예관", "멀티미디어관", "생명과학대학관", "선승관",

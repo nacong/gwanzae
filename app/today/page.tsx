@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Coffee, Home, MapPin, Truck } from "lucide-react";
+import { Coffee, Home, LogOut, MapPin, Truck, Users } from "lucide-react";
 import TabBar from "@/components/TabBar";
-import { schedulesToday, listApplications, dispatchConfirm, type Schedule } from "@/lib/api";
+import { schedulesToday, listApplications, type Schedule } from "@/lib/api";
+import { clearAuth, getStoredAuthUser } from "@/lib/auth";
 
 /* ─── 그룹핑: 스케줄 행 → 시간슬롯 → 정류장(건물) → 카드(신청서) ─── */
 
@@ -42,6 +43,9 @@ interface Slot {
   출동일시: string;
   stops: Stop[];
   appNumbers: string[];
+  requiredPersonnel: number;
+  assignedWorkers: string[];
+  routeReady: boolean;
 }
 
 function buildingOf(s: Schedule): string {
@@ -101,7 +105,21 @@ function groupSchedules(rows: Schedule[], infoByApp: Map<string, AppInfo>): Slot
     }
     const routeStops = [warehouseStop(`${WAREHOUSE_NAME} 출발`), ...stops, warehouseStop(`${WAREHOUSE_NAME} 도착`)];
     const appNumbers = [...new Set(slotRows.map((r) => r.신청번호).filter((n): n is string => !!n))];
-    slots.push({ key: 출동일시, 출동일시, stops: routeStops, appNumbers });
+    const requiredPersonnel = Math.max(
+      1,
+      ...slotRows.map((row) => Math.max(row.투입인원수 ?? 0, row.필요인원수 ?? 1)),
+    );
+    const assignedWorkers = Array.from(new Set(slotRows.flatMap((row) => row.배정인원 ?? [])));
+    const routeReady = slotRows.every((row) => row.출동확정 === true);
+    slots.push({
+      key: 출동일시,
+      출동일시,
+      stops: routeStops,
+      appNumbers,
+      requiredPersonnel,
+      assignedWorkers,
+      routeReady,
+    });
   }
   return slots;
 }
@@ -166,8 +184,12 @@ export default function TodayPage() {
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState(0);
   const [dispatching, setDispatching] = useState(false);
+  const [loggedInWorkerName, setLoggedInWorkerName] = useState("");
 
   useEffect(() => {
+    const signedInName = getStoredAuthUser()?.full_name.trim() ?? "";
+    setLoggedInWorkerName(signedInName);
+
     (async () => {
       try {
         const [rows, apps] = await Promise.all([
@@ -189,14 +211,18 @@ export default function TodayPage() {
 
   async function handleDispatch(slot: Slot) {
     if (!slot) return;
+    const team = Array.from(new Set(slot.assignedWorkers.map((name) => name.trim()).filter(Boolean)));
+    if (loggedInWorkerName && !team.includes(loggedInWorkerName)) {
+      setError("관리자가 이 계정을 해당 출동 인원으로 배정하지 않았습니다.");
+      return;
+    }
+    if (!slot.routeReady) {
+      setError("관리자가 아직 출동 동선을 확정하지 않았습니다.");
+      return;
+    }
     setDispatching(true);
     setError(null);
     try {
-      // 출동확정 → 서버가 슬롯별 건물 동선을 계산·저장하고 각 일정에 심는다.
-      // 이후 dispatch 화면에서 일정별 /navigation 으로 층별 도면 동선을 받아 그린다.
-      const result = await dispatchConfirm();
-      console.log("[dispatch] POST /dispatch/confirm 응답:", result);
-
       const hasBuilding = slot.stops.some((s) => s.kind === "building" && s.scheduleId != null);
       if (!hasBuilding) {
         setError("이 출동 건에는 수거할 일정이 없습니다.");
@@ -207,6 +233,7 @@ export default function TodayPage() {
       // dispatch 화면에 넘길 전체 계획(작업 목록 오버뷰 + 층별 네비 공용)
       const plan = {
         출동일시: slot.출동일시,
+        workerNames: team,
         stops: slot.stops.map((s) => ({
           건물명: s.건물명,
           kind: s.kind ?? "building",
@@ -218,10 +245,19 @@ export default function TodayPage() {
       console.log("[dispatch] 선택된 슬롯:", slot.출동일시, "| 정류장:",
         plan.stops.map((s) => ({ 건물명: s.건물명, kind: s.kind, scheduleId: s.scheduleId })));
 
-      localStorage.setItem("gwanzae-dispatch-plan", JSON.stringify(plan));
-      localStorage.setItem("gwanzae-dispatch-apps", JSON.stringify(slot.appNumbers));
-      localStorage.removeItem("gwanzae-dispatch-buildings"); // 구 캐시 제거
-      localStorage.removeItem("gwanzae-dispatch-route");
+      sessionStorage.setItem("gwanzae-dispatch-plan", JSON.stringify(plan));
+      sessionStorage.setItem("gwanzae-dispatch-apps", JSON.stringify(slot.appNumbers));
+      sessionStorage.setItem("gwanzae-worker-names", JSON.stringify(team));
+      sessionStorage.setItem("gwanzae-worker-name", team[0]); // 구 캐시 호환
+      sessionStorage.setItem("gwanzae-dispatch-started-at", String(Date.now()));
+      sessionStorage.setItem(
+        "gwanzae-dispatch-session-id",
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `dispatch-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      );
+      sessionStorage.removeItem("gwanzae-dispatch-buildings"); // 구 캐시 제거
+      sessionStorage.removeItem("gwanzae-dispatch-route");
       router.push("/dispatch");
     } catch (e) {
       setError(String(e));
@@ -229,13 +265,50 @@ export default function TodayPage() {
     }
   }
 
+  const activeSlot = slots[active];
+
   return (
     <div className="font-pretendard flex h-dvh flex-col overflow-hidden bg-[#f2f4f7] pb-[calc(80px+env(safe-area-inset-bottom,0px))]">
       <header className="mt-2 flex h-14 shrink-0 items-center justify-between px-5 pt-safe-top">
         <h1 className="text-2xl font-extrabold text-[#111827]">오늘 수거 일정</h1>
+        <div className="flex items-center gap-2">
+          <p className="text-xs font-bold text-[#475569]">{loggedInWorkerName}</p>
+          <button
+            type="button"
+            aria-label="로그아웃"
+            onClick={() => { clearAuth(); router.replace("/login"); }}
+            className="flex size-9 items-center justify-center rounded-xl bg-white text-[#64748b]"
+          >
+            <LogOut size={17} />
+          </button>
+        </div>
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col items-center gap-4 px-5 pb-0 pt-2">
+        <div className="w-full rounded-xl bg-white px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Users size={17} className="text-[#475569]" />
+              <p className="text-sm font-bold text-[#475569]">관리자 확정 인원</p>
+            </div>
+            <p className="text-xs font-bold text-[#0043ff]">
+              {activeSlot?.assignedWorkers.length ?? 0}명 배정
+            </p>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {(activeSlot?.assignedWorkers ?? []).map((name) => (
+              <span
+                key={name}
+                className="flex items-center gap-1.5 rounded-xl border border-[#0043ff] bg-[#eef3ff] px-3 py-2 text-sm font-semibold text-[#0043ff]"
+              >
+                {name}
+                {name === loggedInWorkerName && <span className="text-[9px]">본인</span>}
+              </span>
+            ))}
+            {!activeSlot && <span className="text-xs text-[#94a3b8]">배정된 일정을 확인하고 있습니다.</span>}
+          </div>
+          <p className="mt-2 text-[11px] text-[#64748b]">인원 편성은 관리자만 변경할 수 있습니다.</p>
+        </div>
         {loading && <p className="mt-20 text-sm text-[#94a3b8]">일정을 불러오는 중…</p>}
         {error && (
           <div className="w-full rounded-xl bg-white p-4">
@@ -249,8 +322,8 @@ export default function TodayPage() {
               <Coffee size={44} className="text-[#64748b]" />
             </div>
             <div className="flex flex-col gap-2">
-              <p className="text-[22px] font-bold leading-tight text-[#1e293b]">오늘은 수거 일정이 없습니다</p>
-              <p className="text-[22px] font-bold leading-tight text-[#64748b]">오늘은 푹~ 쉬세요</p>
+              <p className="text-[22px] font-bold leading-tight text-[#1e293b]">배정된 수거 일정이 없습니다</p>
+              <p className="text-sm font-semibold leading-relaxed text-[#64748b]">관리자가 인원을 확정하면 이 화면에 일정이 표시됩니다.</p>
             </div>
           </div>
         )}
@@ -302,11 +375,15 @@ export default function TodayPage() {
         <div className="shrink-0 px-5 py-3">
           <button
             onClick={() => handleDispatch(slots[active])}
-            disabled={dispatching}
+            disabled={dispatching || !activeSlot?.routeReady}
             className="flex w-full items-center justify-center gap-3 rounded-xl bg-[#0043ff] px-6 py-4 text-lg font-semibold text-white disabled:bg-[#d0ddef] disabled:text-[#6b7fa0]"
           >
             <Truck size={22} />
-            {dispatching ? "출동 준비 중…" : "출동"}
+            {dispatching
+              ? "출동 준비 중…"
+              : activeSlot?.routeReady
+                ? "수거 화면 열기"
+                : "관리자 동선 확정 대기"}
           </button>
         </div>
       )}
