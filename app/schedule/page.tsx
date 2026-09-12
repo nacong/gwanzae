@@ -614,7 +614,7 @@ export default function SchedulePage() {
   }
 
   return (
-    <div className="font-pretendard flex min-h-dvh flex-col bg-[#f2f4f7] pb-[calc(80px+env(safe-area-inset-bottom))]">
+    <div className="app-screen font-pretendard flex min-h-dvh flex-col pb-[calc(80px+env(safe-area-inset-bottom))]">
       <header className="mt-2 flex h-14 shrink-0 items-center justify-between px-5 pt-safe-top">
         <h1 className="text-2xl font-extrabold text-[#111827]">신청서</h1>
         <div className="flex items-center rounded-full bg-white p-0.5">
@@ -623,7 +623,7 @@ export default function SchedulePage() {
               key={k}
               onClick={() => setSort(k)}
               className={`rounded-full px-3 py-1.5 text-[13px] font-bold transition-colors ${
-                sort === k ? "bg-[#475569] text-white" : "text-[#6b7280]"
+              sort === k ? "bg-[#0043ff] text-white" : "text-[#6b7280]"
               }`}
             >
               {k}
@@ -666,7 +666,7 @@ export default function SchedulePage() {
         onClick={handleOptimize}
         disabled={optimizing}
         aria-label="일정 정하기"
-        className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] left-4 z-40 flex h-12 items-center justify-center gap-2 rounded-full bg-[#475569] px-5 text-sm font-semibold text-white shadow-lg disabled:opacity-60"
+        className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] left-[max(1rem,calc(50%_-_199px))] z-40 flex h-12 items-center justify-center gap-2 rounded-xl bg-[#1f2937] px-5 text-sm font-semibold text-white shadow-lg disabled:opacity-60"
       >
         {optimizing ? (
           <span className="size-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
@@ -679,7 +679,7 @@ export default function SchedulePage() {
       <button
         onClick={() => setPendingFiles([])}
         aria-label="신청서 추가"
-        className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] right-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#0043ff] text-white shadow-lg"
+        className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] right-[max(1rem,calc(50%_-_199px))] z-40 flex size-12 items-center justify-center rounded-xl bg-[#0043ff] text-white shadow-lg"
       >
         <Plus size={24} />
       </button>

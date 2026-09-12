@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Coffee, Home, LogOut, MapPin, Truck, Users } from "lucide-react";
+import { Coffee, Home, MapPin, Truck, Users } from "lucide-react";
 import TabBar from "@/components/TabBar";
 import { schedulesToday, listApplications, type Schedule } from "@/lib/api";
-import { clearAuth, getStoredAuthUser } from "@/lib/auth";
+import { getStoredAuthUser } from "@/lib/auth";
 
 /* ─── 그룹핑: 스케줄 행 → 시간슬롯 → 정류장(건물) → 카드(신청서) ─── */
 
@@ -268,24 +268,14 @@ export default function TodayPage() {
   const activeSlot = slots[active];
 
   return (
-    <div className="font-pretendard flex h-dvh flex-col overflow-hidden bg-[#f2f4f7] pb-[calc(80px+env(safe-area-inset-bottom,0px))]">
+    <div className="app-screen font-pretendard flex h-dvh flex-col overflow-hidden pb-[calc(80px+env(safe-area-inset-bottom,0px))]">
       <header className="mt-2 flex h-14 shrink-0 items-center justify-between px-5 pt-safe-top">
         <h1 className="text-2xl font-extrabold text-[#111827]">오늘 수거 일정</h1>
-        <div className="flex items-center gap-2">
-          <p className="text-xs font-bold text-[#475569]">{loggedInWorkerName}</p>
-          <button
-            type="button"
-            aria-label="로그아웃"
-            onClick={() => { clearAuth(); router.replace("/login"); }}
-            className="flex size-9 items-center justify-center rounded-xl bg-white text-[#64748b]"
-          >
-            <LogOut size={17} />
-          </button>
-        </div>
+        <p className="rounded-lg bg-white/70 px-2.5 py-1.5 text-xs font-bold text-[#4b5563]">{loggedInWorkerName}</p>
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col items-center gap-4 px-5 pb-0 pt-2">
-        <div className="w-full rounded-xl bg-white px-4 py-3">
+        <div className="surface-card w-full px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Users size={17} className="text-[#475569]" />
@@ -341,7 +331,7 @@ export default function TodayPage() {
                 const { title, range } = slotLabel(slot.출동일시);
                 return (
                   <div key={slot.key} className="max-h-full w-full shrink-0 snap-center">
-                    <div className="flex max-h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border-2 border-[#003dea] bg-white">
+                    <div className="flex max-h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border-2 border-[#0043ff] bg-white shadow-[0_4px_8px_rgba(0,67,255,0.05)]">
                       <div className="flex flex-col gap-1 border-b border-[#e2e8f0] px-5 py-4">
                         <p className="text-[18px] font-bold text-[#1e293b]">{title}</p>
                         <p className="text-base text-[#475569]">{range}</p>

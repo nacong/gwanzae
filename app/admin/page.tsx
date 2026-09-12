@@ -19,6 +19,7 @@ import {
   type Application, type FatigueDatasetTrainingResult, type Schedule, type StaffingProposal, type WorkerTodayStatus,
 } from "@/lib/api";
 import { clearAuth, getStoredAuthUser } from "@/lib/auth";
+import TabBar from "@/components/TabBar";
 
 /** 다양한 날짜 포맷을 "YYYY-MM-DD"로 통일 */
 function normalizeDate(dateStr: string): string {
@@ -534,23 +535,27 @@ export default function Home() {
   };
 
   return (
-    <main className="flex-1 overflow-x-hidden pb-28 px-4 pt-safe-top">
+    <main className="app-screen font-pretendard flex-1 overflow-x-hidden px-4 pb-44 pt-safe-top">
 
       {/* ── 헤더 ── */}
       <header className="pt-6 pb-6">
         <div className="flex items-start justify-between">
           <div>
-            <p className="text-xs font-medium text-indigo-400 mb-0.5 tracking-wide">
+            <h1 className="text-xl font-extrabold tracking-tight text-[#1f2937]">{authUser?.organization_name ?? "관재 조직"}</h1>
+            <p className="mt-1 text-xs font-medium text-[#9ca3af]">
               {mounted ? time.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "short" }) : "--"}
+              <span className="mx-1.5">•</span>
+              {mounted ? time.toLocaleTimeString("ko-KR") : "--:--:--"} 기준
             </p>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">관재 AI 출동관리</h1>
+            {authUser?.organization_entry_code && (
+              <p className="mt-1 font-mono text-[15px] font-extrabold tracking-[0.08em] text-[#0043ff]">{authUser.organization_entry_code}</p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
               className={cn(
-                "mt-1 flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-bold",
-                staff.count > 0 ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-500"
+                "mt-1 flex items-center gap-1.5 rounded-lg bg-[#f3f4f6] px-2.5 py-1.5 text-xs font-semibold text-[#4b5563]"
               )}
             >
               <Users className="w-3.5 h-3.5" />
@@ -567,40 +572,23 @@ export default function Home() {
           </div>
         </div>
 
-        {authUser && (
-          <div className="mt-3 flex items-center justify-between rounded-xl border border-indigo-100 bg-white px-3 py-2.5">
-            <div>
-              <p className="text-[10px] font-bold text-indigo-400">관리 조직</p>
-              <p className="mt-0.5 text-sm font-bold text-slate-800">{authUser.organization_name}</p>
-            </div>
-            {authUser.organization_entry_code && (
-              <div className="text-right">
-                <p className="text-[10px] font-bold text-slate-400">작업자 입장 코드</p>
-                <p className="mt-0.5 font-mono text-base font-extrabold tracking-[0.18em] text-[#0043ff]">
-                  {authUser.organization_entry_code}
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
         {staff.count > 0 && (
           <p className="mt-2 text-xs text-slate-400 leading-relaxed">{staff.label}</p>
         )}
 
         {/* 실시간 시계 */}
-        <div className="mt-3 flex items-center gap-1.5 text-xs text-slate-400">
+        <div className="hidden">
           <Clock className="w-3.5 h-3.5 text-indigo-300" />
           <span className="tabular-nums font-medium">{mounted ? time.toLocaleTimeString("ko-KR") : "--:--:--"}</span>
         </div>
       </header>
 
       {/* 서버 기준 금일 전체 출동 일정 */}
-      <section className="mb-7 rounded-2xl border border-indigo-100 bg-white p-4">
+      <section className="surface-card mb-7 p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
-              <Truck className="h-4 w-4 text-indigo-600" />
+              <Truck className="h-5 w-5 text-[#0043ff]" />
               <h2 className="text-sm font-bold text-slate-900">금일 수거 일정</h2>
             </div>
             <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
@@ -626,7 +614,7 @@ export default function Home() {
             const buildings = Array.from(new Set(slot.rows.map(scheduleBuildingName)));
             const assigned = slot.assignedWorkers.length > 0;
             return (
-              <div key={slot.dispatchTime} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div key={slot.dispatchTime} className="rounded-xl bg-[#f3f4f6] p-3.5">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-extrabold text-slate-800">
@@ -655,7 +643,7 @@ export default function Home() {
                   onClick={() => void openAdminDispatch(slot)}
                   disabled={openingDispatch === slot.dispatchTime}
                   className={`mt-3 flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold ${
-                    assigned ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-600"
+                    assigned ? "bg-[#0043ff] text-white" : "bg-[#d0ddef] text-[#6b7fa0]"
                   } disabled:opacity-50`}
                 >
                   {openingDispatch === slot.dispatchTime
@@ -679,23 +667,23 @@ export default function Home() {
 
       {/* 실제 작업 기록 기반 상태와 관리자 확정형 인원 추천 */}
       <section className="mb-7 space-y-4">
-        <div className="rounded-2xl bg-slate-900 p-4 text-white">
+        <div className="surface-card rounded-2xl p-4 text-[#1f2937]">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <Activity className="h-4 w-4 text-emerald-300" />
+                <Activity className="h-4 w-4 text-[#0043ff]" />
                 <h2 className="text-sm font-bold">작업자 상태</h2>
               </div>
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+              <p className="mt-1 text-[11px] leading-relaxed text-[#4b5563]">
                 작업 전에는 테스트 초기값 또는 최근 상태를, 출동 후에는 오늘의 실제·예측값을 보여줍니다.
               </p>
             </div>
             {workerStatusLoading && <Loader2 className="h-4 w-4 animate-spin text-slate-300" />}
           </div>
 
-          <div className="mt-4 flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="mt-4 flex flex-col gap-3 rounded-xl bg-[#f3f4f6] p-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-xs font-bold text-white">사전 데이터로 개인 모델 학습</p>
+              <p className="text-xs font-bold text-[#1f2937]">사전 데이터로 개인 모델 학습</p>
               <p className="mt-1 text-[10px] leading-relaxed text-slate-400">
                 CSV·JSON·XLSX 파일을 올리면 공통 모델과 작업자별 모델을 즉시 갱신합니다.
               </p>
@@ -711,7 +699,7 @@ export default function Home() {
               type="button"
               onClick={() => fatigueDatasetInputRef.current?.click()}
               disabled={fatigueDatasetTraining}
-              className="flex shrink-0 items-center justify-center gap-1.5 rounded-xl bg-emerald-500 px-3 py-2 text-[11px] font-bold text-slate-950 disabled:opacity-50"
+              className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-white px-3 py-2 text-[11px] font-bold text-[#0043ff] disabled:opacity-50"
             >
               {fatigueDatasetTraining
                 ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -749,12 +737,12 @@ export default function Home() {
               const condition = effectiveBorg == null
                 ? { label: "데이터 없음", color: "bg-white/10 text-slate-300" }
                 : effectiveBorg >= 7
-                  ? { label: "휴식 고려", color: "bg-red-400/20 text-red-200" }
+                  ? { label: "위험", color: "bg-red-100 text-red-600" }
                   : effectiveBorg >= 4
-                    ? { label: "주의", color: "bg-amber-400/20 text-amber-200" }
-                    : { label: "양호", color: "bg-emerald-400/20 text-emerald-200" };
+                    ? { label: "주의", color: "bg-amber-100 text-amber-700" }
+                    : { label: "양호", color: "bg-emerald-100 text-emerald-600" };
               return (
-                <div key={name} className="rounded-xl bg-white/10 p-3">
+                <div key={name} className="rounded-xl border border-[#e5e7eb] bg-white p-3 shadow-[0_4px_8px_rgba(31,41,55,0.03)]">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-bold">{name}</p>
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${condition.color}`}>
@@ -797,7 +785,7 @@ export default function Home() {
           </p>
         </div>
 
-        <div id="admin-staffing" className="scroll-mt-4 rounded-2xl border border-indigo-100 bg-white p-4">
+        <div id="admin-staffing" className="surface-card scroll-mt-4 p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
@@ -812,7 +800,7 @@ export default function Home() {
               type="button"
               onClick={loadStaffingPreview}
               disabled={staffingLoading}
-              className="flex shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-[11px] font-bold text-white disabled:opacity-50"
+              className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[#0043ff] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-50"
             >
               {staffingLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
               추천안 보기
@@ -1087,7 +1075,7 @@ export default function Home() {
       {/* ── 하단 고정 버튼 ── */}
       <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileChange} />
 
-      <div className="fixed bottom-0 left-0 right-0 px-4 pt-5 pb-safe-bottom bg-gradient-to-t from-[#eef0f8] via-[#eef0f8]/95 to-transparent z-40">
+      <div className="fixed bottom-16 left-0 right-0 z-40 mx-auto w-full max-w-[430px] bg-gradient-to-t from-[#ebf4ff] via-[#ebf4ff]/95 to-transparent px-4 pb-3 pt-5">
         <div className="flex gap-3">
           <button
             onClick={() => { resetScan(); setScanOpen(true); }}
@@ -1528,6 +1516,7 @@ export default function Home() {
           </>
         )}
       </AnimatePresence>
+      <TabBar />
     </main>
   );
 }
