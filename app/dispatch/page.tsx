@@ -1372,14 +1372,6 @@ export default function DispatchPage() {
       }
     } catch { /* 완료 처리 실패해도 완료 화면은 보여준다 */ }
 
-    // 관리자가 종료한 경우에는 작업 기록을 남긴 뒤 작업자의 첫 화면으로 바로 복귀한다.
-    // 관리자 주도 종료에서는 별도의 Borg 응답을 기다리지 않는다.
-    if (returnHome) {
-      await savePersonalFatigue(null, finalTracking);
-      setFinishing(false);
-      return;
-    }
-
     try {
       const prediction = await predictFatigueAfterWork({
         schedule_ids: buildings?.map((building) => building.scheduleId) ?? [],
@@ -1390,7 +1382,9 @@ export default function DispatchPage() {
         team_size: dispatchWorkers.length,
       });
       setFatiguePrediction(prediction);
-      if (!prediction.survey_required && prediction.predicted_borg_cr10 != null) {
+      // 작업자가 직접 끝낸 경우에는 모델의 설문 주기를 따르지만, 관리자가 완료를
+      // 공유한 경우에는 모든 작업자에게 Borg CR10 화면을 반드시 표시한다.
+      if (!returnHome && !prediction.survey_required && prediction.predicted_borg_cr10 != null) {
         await savePersonalFatigue(null, finalTracking);
         setFinishing(false);
         return;
