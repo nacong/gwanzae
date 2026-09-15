@@ -1063,6 +1063,9 @@ export default function DispatchPage() {
   const [finishing, setFinishing] = useState(false);
   const lastPublishedNavigationRef = useRef<string | null>(null);
   const lastAppliedNavigationRevisionRef = useRef(-1);
+  const remoteCompletionHandledRef = useRef(false);
+  const returnHomeAfterFinishRef = useRef(false);
+  const finishRef = useRef<(returnHome?: boolean) => Promise<void>>(async () => undefined);
   const { snapshot: tracking, stop: stopTracking } = useWebWorkTracker(dispatchStartedAt);
   const dispatchWorkers = useMemo(() => {
     const workers = plan?.workerNames?.map((name) => name.trim()).filter(Boolean) ?? [];
@@ -1182,6 +1185,15 @@ export default function DispatchPage() {
       try {
         const progress = await getNavigationProgress(plan.출동일시);
         if (!active || progress.revision <= lastAppliedNavigationRevisionRef.current) return;
+        if (progress.phase === "completed") {
+          lastAppliedNavigationRevisionRef.current = progress.revision;
+          if (!remoteCompletionHandledRef.current) {
+            remoteCompletionHandledRef.current = true;
+            active = false;
+            void finishRef.current(true);
+          }
+          return;
+        }
         const nextBuildingIdx = buildings.findIndex((building) => building.scheduleId === progress.active_schedule_id);
         if (nextBuildingIdx < 0) return;
         lastAppliedNavigationRevisionRef.current = progress.revision;
@@ -1317,10 +1329,31 @@ export default function DispatchPage() {
     setPhase("overview");
   }
 
-  async function finish() {
+  async function finish(returnHome = false) {
     if (finishing) return;
+    remoteCompletionHandledRef.current = true;
+    returnHomeAfterFinishRef.current = returnHome;
     setFinishing(true);
     if (isAdminViewer) {
+      const activeScheduleId = buildings?.[buildingIdx]?.scheduleId;
+      if (!plan || !activeScheduleId) {
+        window.alert("완료 상태를 공유할 출동 정보를 찾지 못했습니다. 오늘 화면에서 다시 출동을 열어주세요.");
+        setFinishing(false);
+        return;
+      }
+      try {
+        await updateNavigationProgress({
+          dispatch_time: plan.출동일시,
+          phase: "completed",
+          active_schedule_id: activeScheduleId,
+          step_index: Math.min(stepIdx, Math.max(steps.length - 1, 0)),
+        });
+      } catch (syncError) {
+        console.warn("[dispatch] 관리자 완료 상태 공유 실패", syncError);
+        window.alert("작업자 화면에 수거 종료를 전달하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.");
+        setFinishing(false);
+        return;
+      }
       stopTracking();
       sessionStorage.removeItem("gwanzae-dispatch-plan");
       sessionStorage.removeItem("gwanzae-dispatch-apps");
@@ -1338,6 +1371,14 @@ export default function DispatchPage() {
         await Promise.all(targets.map((a) => completeApplication(a.id)));
       }
     } catch { /* 완료 처리 실패해도 완료 화면은 보여준다 */ }
+
+    // 관리자가 종료한 경우에는 작업 기록을 남긴 뒤 작업자의 첫 화면으로 바로 복귀한다.
+    // 관리자 주도 종료에서는 별도의 Borg 응답을 기다리지 않는다.
+    if (returnHome) {
+      await savePersonalFatigue(null, finalTracking);
+      setFinishing(false);
+      return;
+    }
 
     try {
       const prediction = await predictFatigueAfterWork({
@@ -1360,6 +1401,8 @@ export default function DispatchPage() {
     setFatigueOpen(true);
     setFinishing(false);
   }
+
+  finishRef.current = finish;
 
   async function savePersonalFatigue(borg: number | null, trackingOverride?: WorkTrackingSnapshot) {
     const activeTracking = trackingOverride ?? completionTracking;
@@ -1424,6 +1467,11 @@ export default function DispatchPage() {
     sessionStorage.removeItem("gwanzae-dispatch-started-at");
     sessionStorage.removeItem("gwanzae-dispatch-session-id");
     setFatigueOpen(false);
+    if (returnHomeAfterFinishRef.current) {
+      setSavingSession(false);
+      router.replace(homePath);
+      return;
+    }
     setDone(true);
     setSavingSession(false);
   }

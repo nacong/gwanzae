@@ -440,7 +440,7 @@ export async function confirmStaffingRecommendation(
 
 export type NavigationProgress = {
   dispatch_time: string;
-  phase: "overview" | "nav";
+  phase: "overview" | "nav" | "completed";
   active_schedule_id: number | null;
   step_index: number;
   revision: number;
@@ -456,7 +456,7 @@ export async function getNavigationProgress(dispatchTime: string): Promise<Navig
 
 export async function updateNavigationProgress(body: {
   dispatch_time: string;
-  phase: "overview" | "nav";
+  phase: "overview" | "nav" | "completed";
   active_schedule_id: number;
   step_index: number;
 }): Promise<NavigationProgress> {
