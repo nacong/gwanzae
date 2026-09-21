@@ -2,12 +2,13 @@
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { ArrowLeft, Phone, MoreVertical, Camera, X, ImageIcon, Upload, PartyPopper, Home, MapPin, CarFront, Timer } from "lucide-react";
 import {
-  listApplications, completeApplication, scheduleNavigation, schedulesToday, assetUrl, createWorkSession, predictFatigueAfterWork,
+  listApplications, completeApplication, scheduleNavigation, schedulesToday, schedulesUpcoming, assetUrl, createWorkSession, predictFatigueAfterWork,
   getNavigationProgress, updateNavigationProgress,
-  type FatiguePrediction, type NavFloor, type NavigationResponse,
+  type BodyDiscomfortPart, type FatiguePrediction, type NavFloor, type NavigationResponse,
 } from "@/lib/api";
 import { getStoredAuthUser, type AuthUser } from "@/lib/auth";
 import { useWebWorkTracker, type WorkTrackingSnapshot } from "@/lib/work-tracker";
@@ -784,9 +785,93 @@ function FatiguePrompt({ workerName, saving, onAnswer }: {
   );
 }
 
+const BODY_DISCOMFORT_PARTS: Array<{
+  value: BodyDiscomfortPart;
+  position: string;
+}> = [
+  { value: "목/어깨", position: "left-[46%] top-[11%]" },
+  { value: "팔꿈치", position: "left-[10%] top-[34%]" },
+  { value: "허리/등", position: "left-[37%] top-[34%]" },
+  { value: "손목", position: "right-[4%] top-[43%]" },
+  { value: "무릎", position: "left-[39%] top-[68%]" },
+  { value: "발목", position: "left-[40%] top-[85%]" },
+];
+
+function BodyConditionPrompt({ saving, onSubmit }: {
+  saving: boolean;
+  onSubmit: (parts: BodyDiscomfortPart[]) => void;
+}) {
+  const [selectedParts, setSelectedParts] = useState<BodyDiscomfortPart[]>([]);
+  const todayLabel = new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric" }).format(new Date());
+
+  const togglePart = (part: BodyDiscomfortPart) => {
+    setSelectedParts((current) => (
+      current.includes(part)
+        ? current.filter((item) => item !== part)
+        : [...current, part]
+    ));
+  };
+
+  return (
+    <div className="font-pretendard fixed inset-0 z-50 flex flex-col overflow-hidden bg-[#f2f4f7] px-4 pb-[calc(16px+env(safe-area-inset-bottom))] pt-[calc(16px+env(safe-area-inset-top))]">
+      <div className="mx-auto flex w-full max-w-[393px] flex-1 flex-col">
+        <ArrowLeft className="mt-1 size-6 text-[#111827]" aria-hidden="true" />
+        <h1 className="mt-8 text-[28px] font-extrabold leading-[1.18] text-[#1e293b]">
+          {todayLabel} 오늘,<br />불편한 부위가 있나요?
+        </h1>
+
+        <div className="relative mx-auto mt-5 h-[min(58vh,508px)] min-h-[390px] max-h-[508px] w-full max-w-[361px] flex-1">
+          <div className="absolute left-1/2 top-0 h-full w-[219px] -translate-x-1/2 overflow-hidden opacity-80" aria-hidden="true">
+            <Image
+              src="/figma/body-condition.png"
+              alt=""
+              width={512}
+              height={512}
+              className="absolute left-1/2 top-0 h-auto min-h-full w-[506px] max-w-none -translate-x-1/2 object-cover"
+              priority
+            />
+          </div>
+          {BODY_DISCOMFORT_PARTS.map(({ value, position }) => {
+            const selected = selectedParts.includes(value);
+            return (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={selected}
+                disabled={saving}
+                onClick={() => togglePart(value)}
+                className={`absolute ${position} rounded-xl border px-5 py-3.5 text-[17px] font-bold shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition active:scale-95 disabled:opacity-50 ${
+                  selected
+                    ? "border-[#0043ff] bg-[#0043ff]/90 text-white"
+                    : "border-[#bfbfbf] bg-white/90 text-[#4d4d4d]"
+                }`}
+              >
+                {value}
+              </button>
+            );
+          })}
+        </div>
+
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => onSubmit(selectedParts)}
+          className={`mt-4 flex h-[53px] w-full shrink-0 items-center justify-center rounded-xl border text-[18px] font-semibold disabled:opacity-50 ${
+            selectedParts.length > 0
+              ? "border-[#0043ff] bg-[#0043ff] text-white"
+              : "border-[#111827] bg-white text-[#111827]"
+          }`}
+        >
+          {saving ? "작업 기록 저장 중…" : selectedParts.length > 0 ? "선택 완료" : "없어요"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ─── 전체 완료 화면 ──────────────────────────────────────── */
 
-function CompletionScreen({ count, elapsed, workElapsed, teamWorkers, recordedWorkerName, borg, predictedBorg, onHome }: {
+function CompletionScreen({ count, elapsed, workElapsed, teamWorkers, recordedWorkerName, borg, predictedBorg, bodyParts, onHome }: {
   count: number;
   elapsed: string;
   workElapsed: string;
@@ -794,6 +879,7 @@ function CompletionScreen({ count, elapsed, workElapsed, teamWorkers, recordedWo
   recordedWorkerName: string;
   borg: number | null;
   predictedBorg: number | null;
+  bodyParts: BodyDiscomfortPart[];
   onHome: () => void;
 }) {
   return (
@@ -826,6 +912,10 @@ function CompletionScreen({ count, elapsed, workElapsed, teamWorkers, recordedWo
             <p className="font-bold text-black">
               {borg != null ? `${borg}/10` : predictedBorg != null ? `${predictedBorg.toFixed(1)}/10` : "미응답"}
             </p>
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <p className="shrink-0 text-[#64748b]">불편 부위</p>
+            <p className="text-right font-bold text-black">{bodyParts.length > 0 ? bodyParts.join(", ") : "없음"}</p>
           </div>
         </div>
       </div>
@@ -1055,9 +1145,11 @@ export default function DispatchPage() {
   const [done, setDone] = useState(false);
   const [dispatchStartedAt, setDispatchStartedAt] = useState<number | null>(null);
   const [completionTracking, setCompletionTracking] = useState<WorkTrackingSnapshot | null>(null);
+  const [bodyConditionOpen, setBodyConditionOpen] = useState(false);
   const [fatigueOpen, setFatigueOpen] = useState(false);
   const [savingSession, setSavingSession] = useState(false);
   const [reportedBorg, setReportedBorg] = useState<number | null>(null);
+  const [reportedBodyParts, setReportedBodyParts] = useState<BodyDiscomfortPart[]>([]);
   const [fatiguePrediction, setFatiguePrediction] = useState<FatiguePrediction | null>(null);
   const [loggedInUser, setLoggedInUser] = useState<AuthUser | null>(null);
   const [finishing, setFinishing] = useState(false);
@@ -1100,8 +1192,11 @@ export default function DispatchPage() {
         if (list.length === 0) throw new Error("출동할 건물이 없습니다.");
 
         // 최적화를 다시 실행하면 서버가 기존 schedule 행을 삭제하고 새 ID를 만든다.
-        // 브라우저에 남은 이전 계획으로 navigation을 호출하기 전에 현재 일정과 대조한다.
-        const currentSchedules = await schedulesToday();
+        // 작업자는 오늘 배정만, 관리자는 관리자 화면에서 선택할 수 있는 오늘 이후
+        // 전체 일정과 대조한다. 미래 계획을 오늘 일정과만 비교해 만료로 오판하지 않는다.
+        const currentSchedules = storedUser?.role === "admin"
+          ? await schedulesUpcoming()
+          : await schedulesToday();
         const currentScheduleIds = new Set(currentSchedules.map((schedule) => schedule.id));
         const staleScheduleIds = list
           .map((building) => building.scheduleId)
@@ -1382,23 +1477,37 @@ export default function DispatchPage() {
         team_size: dispatchWorkers.length,
       });
       setFatiguePrediction(prediction);
-      // 작업자가 직접 끝낸 경우에는 모델의 설문 주기를 따르지만, 관리자가 완료를
-      // 공유한 경우에는 모든 작업자에게 Borg CR10 화면을 반드시 표시한다.
-      if (!returnHome && !prediction.survey_required && prediction.predicted_borg_cr10 != null) {
-        await savePersonalFatigue(null, finalTracking);
-        setFinishing(false);
-        return;
-      }
     } catch (predictionError) {
       console.warn("[dispatch] 개인 피로도 예측 실패, 실제 Borg 설문을 유지합니다.", predictionError);
     }
-    setFatigueOpen(true);
+    // 불편 부위는 예측할 수 없는 안전 정보이므로 Borg 설문 주기와 관계없이 매 출동마다 묻는다.
+    setBodyConditionOpen(true);
     setFinishing(false);
   }
 
   finishRef.current = finish;
 
-  async function savePersonalFatigue(borg: number | null, trackingOverride?: WorkTrackingSnapshot) {
+  function submitBodyCondition(parts: BodyDiscomfortPart[]) {
+    setReportedBodyParts(parts);
+    // 관리자가 완료를 공유한 경우에는 기존 정책대로 실제 Borg 응답도 반드시 받는다.
+    if (
+      !returnHomeAfterFinishRef.current
+      && fatiguePrediction
+      && !fatiguePrediction.survey_required
+      && fatiguePrediction.predicted_borg_cr10 != null
+    ) {
+      void savePersonalFatigue(null, completionTracking ?? undefined, parts);
+      return;
+    }
+    setBodyConditionOpen(false);
+    setFatigueOpen(true);
+  }
+
+  async function savePersonalFatigue(
+    borg: number | null,
+    trackingOverride?: WorkTrackingSnapshot,
+    bodyPartsOverride?: BodyDiscomfortPart[],
+  ) {
     const activeTracking = trackingOverride ?? completionTracking;
     if (!activeTracking || savingSession) return;
     setSavingSession(true);
@@ -1429,6 +1538,7 @@ export default function DispatchPage() {
       gps_rejected_count: activeTracking.rejectedCount,
       tracking_quality: activeTracking.quality,
       borg_cr10: borg,
+      body_discomfort_parts: bodyPartsOverride ?? reportedBodyParts,
       team_size: dispatchWorkers.length,
     };
 
@@ -1461,6 +1571,7 @@ export default function DispatchPage() {
     sessionStorage.removeItem("gwanzae-dispatch-started-at");
     sessionStorage.removeItem("gwanzae-dispatch-session-id");
     setFatigueOpen(false);
+    setBodyConditionOpen(false);
     if (returnHomeAfterFinishRef.current) {
       setSavingSession(false);
       router.replace(homePath);
@@ -1468,6 +1579,15 @@ export default function DispatchPage() {
     }
     setDone(true);
     setSavingSession(false);
+  }
+
+  if (bodyConditionOpen && completionTracking) {
+    return (
+      <BodyConditionPrompt
+        saving={savingSession}
+        onSubmit={submitBodyCondition}
+      />
+    );
   }
 
   if (fatigueOpen && completionTracking) {
@@ -1491,6 +1611,7 @@ export default function DispatchPage() {
         recordedWorkerName={loggedInUser?.full_name ?? "로그인 작업자"}
         borg={reportedBorg}
         predictedBorg={fatiguePrediction?.predicted_borg_cr10 ?? null}
+        bodyParts={reportedBodyParts}
         onHome={() => router.push(homePath)}
       />
     );

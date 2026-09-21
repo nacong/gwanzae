@@ -21,6 +21,9 @@
 - Figma의 ‘작업 시간 / 몸 피로 / 상태 참고값 / 누적 피로’는 `GET /workers/status/today`의
   `total_work_seconds / latest_actual_borg_cr10 / state_borg_cr10 / daily_load`에 대응합니다.
 - 실제 피로 응답이 없는 사용자는 `latest_actual_borg_cr10`이 `null`이므로 화면에는 `-`로 표시합니다.
+- 출동 완료 후 전신 피로도는 기존처럼 `borg_cr10`(Borg CR10, 0~10)에 저장하고,
+  불편 부위는 같은 작업 기록의 `body_discomfort_parts` 배열에 별도로 저장합니다.
+  관리자 작업자 상태 카드에는 가장 최근 기록의 `latest_body_discomfort_parts`를 표시합니다.
 - Figma의 양호·주의·위험 상태는 현재 클라이언트 기준값(상태 참고값 4 미만 / 4 이상 / 7 이상)으로 구분됩니다. 서버가 상태 등급을 직접 반환하지 않으므로 이 임계값은 프런트엔드 정책입니다.
 
 ### 4. 근무 인원 배지

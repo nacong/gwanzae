@@ -2,39 +2,25 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Camera, Users, Clock, CheckCircle2, X, Loader2,
   FileText, ScanLine, Truck, MapPin, AlertCircle, Navigation,
-  Timer, ChevronRight, Package, ArrowRight, RefreshCw, Activity, Sparkles, LogOut, Upload,
+  Timer, ChevronRight, Package, ArrowRight, RefreshCw, Sparkles, LogOut, Upload,
 } from "lucide-react";
 import {
   cn, DispatchApplication, DispatchTimeGroup,
-  getCurrentStaffStatus, getCurrentStaffNames, StaffStatus,
+  getCurrentStaffStatus, StaffStatus,
 } from "@/lib/utils";
 import {
-  confirmStaffingRecommendation, createApplicationFromOcr, dispatchConfirm, schedulesToday,
-  optimizeRun, staffingRecommendationsToday, trainFatigueDataset, workersStatusToday,
+  confirmStaffingRecommendation, createApplicationFromOcr, dispatchConfirm, listApplications,
+  optimizeRun, schedulesUpcoming, staffingRecommendationsUpcoming, trainFatigueDataset, workersStatusToday,
   updateApplication,
   type Application, type FatigueDatasetTrainingResult, type Schedule, type StaffingProposal, type WorkerTodayStatus,
 } from "@/lib/api";
 import { clearAuth, getStoredAuthUser } from "@/lib/auth";
 import TabBar from "@/components/TabBar";
-
-/** 다양한 날짜 포맷을 "YYYY-MM-DD"로 통일 */
-function normalizeDate(dateStr: string): string {
-  if (!dateStr) return "날짜 미정";
-  const cleaned = dateStr
-    .replace(/년\s*/g, "-")
-    .replace(/월\s*/g, "-")
-    .replace(/일/g, "")
-    .replace(/\./g, "-")
-    .replace(/\s+/g, "")
-    .trim();
-  const d = new Date(cleaned);
-  if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
-  return dateStr;
-}
 
 type AdminTodaySlot = {
   dispatchTime: string;
@@ -43,6 +29,26 @@ type AdminTodaySlot = {
   requiredPersonnel: number;
   routeReady: boolean;
 };
+
+type WorkerCondition = {
+  label: "데이터 없음" | "양호" | "주의" | "위험";
+  iconSrc: string | null;
+  bannerClass: string;
+  textClass: string;
+};
+
+function workerCondition(borg: number | null | undefined): WorkerCondition {
+  if (borg == null) {
+    return { label: "데이터 없음", iconSrc: null, bannerClass: "bg-slate-100", textClass: "text-slate-500" };
+  }
+  if (borg >= 7) {
+    return { label: "위험", iconSrc: "/figma/status-danger.svg", bannerClass: "bg-[#fee2e2]", textClass: "text-[#dc2626]" };
+  }
+  if (borg >= 4) {
+    return { label: "주의", iconSrc: "/figma/status-caution.svg", bannerClass: "bg-[#fef3c7]", textClass: "text-[#b48200]" };
+  }
+  return { label: "양호", iconSrc: "/figma/status-good.svg", bannerClass: "bg-[#e1fbf0]", textClass: "text-[#059669]" };
+}
 
 function scheduleBuildingName(row: Schedule): string {
   if (row.동선?.건물명) return row.동선.건물명;
@@ -82,6 +88,17 @@ function toScannedData(application: Application): ScannedData {
       수량: item.수량 ?? 1,
       필요인원수: item.필요인원수 ?? 0,
     })),
+  };
+}
+
+function toPendingApplication(application: Application): DispatchApplication {
+  const data = toScannedData(application);
+  return {
+    ...data,
+    id: String(application.id),
+    requiredPersonnel: Math.max(0, ...data.물품목록.map((item) => item.필요인원수)),
+    status: "unoptimized",
+    createdAt: Date.now(),
   };
 }
 
@@ -135,21 +152,35 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    (async () => {
+    let active = true;
+    let refreshing = false;
+
+    const refreshWorkerStatuses = async () => {
+      if (refreshing) return;
+      refreshing = true;
       try {
-        setWorkerStatuses(await workersStatusToday());
+        const statuses = await workersStatusToday();
+        if (active) setWorkerStatuses(statuses);
       } catch (statusError) {
         console.warn("[admin] 작업자 상태 조회 실패", statusError);
       } finally {
-        setWorkerStatusLoading(false);
+        refreshing = false;
+        if (active) setWorkerStatusLoading(false);
       }
-    })();
+    };
+
+    void refreshWorkerStatuses();
+    const timer = window.setInterval(() => { void refreshWorkerStatuses(); }, 60_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
   }, []);
 
   const refreshTodaySchedules = async () => {
     try {
       setTodaySchedulesError(null);
-      setTodaySchedules(await schedulesToday());
+      setTodaySchedules(await schedulesUpcoming());
     } catch (scheduleError) {
       setTodaySchedulesError(String(scheduleError));
     } finally {
@@ -163,13 +194,6 @@ export default function Home() {
 
   useEffect(() => {
     try {
-      const u = localStorage.getItem("gwanzae-unoptimized");
-      if (u) {
-        const parsed = JSON.parse(u);
-        // 구 형식(items 필드) 데이터 제거
-        const valid = parsed.filter((a: DispatchApplication) => Array.isArray(a.물품목록));
-        setUnoptimizedApps(valid);
-      }
       const g = localStorage.getItem("gwanzae-timegroups");
       if (g) {
         const parsed = JSON.parse(g);
@@ -179,6 +203,19 @@ export default function Home() {
         setTimeGroups(valid);
       }
     } catch { /* ignore */ }
+    void listApplications("접수").then((applications) => {
+      const pending = applications
+        .filter((application) => application.점검완료 === true)
+        .map(toPendingApplication);
+      setUnoptimizedApps(pending);
+      localStorage.setItem("gwanzae-unoptimized", JSON.stringify(pending));
+    }).catch((pendingError) => {
+      console.warn("[admin] 최적화 대기 신청서 조회 실패", pendingError);
+      try {
+        const raw = localStorage.getItem("gwanzae-unoptimized");
+        if (raw) setUnoptimizedApps(JSON.parse(raw));
+      } catch { /* 로컬 폴백도 실패하면 빈 목록 유지 */ }
+    });
   }, []);
 
   const saveUnoptimized = (apps: DispatchApplication[]) => {
@@ -307,13 +344,18 @@ export default function Home() {
 
     // 1) 인증된 POST /optimize/run — 점검 완료 신청서를 서버에서 일정으로 생성
     try {
-      await optimizeRun();
-      await refreshTodaySchedules();
+      const result = await optimizeRun();
+      await Promise.all([refreshTodaySchedules(), loadStaffingPreview()]);
       // 재최적화는 schedule ID를 새로 만들므로 이전 출동 계획은 더 이상 유효하지 않다.
       sessionStorage.removeItem("gwanzae-dispatch-plan");
       sessionStorage.removeItem("gwanzae-dispatch-apps");
       sessionStorage.removeItem("gwanzae-dispatch-started-at");
       sessionStorage.removeItem("gwanzae-dispatch-session-id");
+      const unassigned = new Set(result.미배정_신청서);
+      saveUnoptimized(unoptimizedApps.filter((application) => unassigned.has(application.신청번호)));
+      if (result.미배정_신청서.length > 0) {
+        setTodaySchedulesError(`일정을 배정하지 못한 신청서: ${result.미배정_신청서.join(", ")}`);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[optimize/run API error]", err);
@@ -322,33 +364,6 @@ export default function Home() {
       return;
     }
 
-    // 2) 신청일자 기준 그룹핑
-    const dateMap = new Map<string, DispatchApplication[]>();
-    for (const app of unoptimizedApps) {
-      const key = normalizeDate(app.신청일자);
-      if (!dateMap.has(key)) dateMap.set(key, []);
-      dateMap.get(key)!.push(app);
-    }
-
-    // 3) /optimize/run이 서버 일정을 이미 생성했다. 이 로컬 그룹은 화면 표시용이며,
-    // 실제 실내 동선은 출동 확정 시 /dispatch/confirm에서 계산한다.
-    const newGroups: DispatchTimeGroup[] = Array.from(dateMap.entries()).map(([date, apps]) => {
-      const optimizedRoute = Array.from(new Set(
-        apps.flatMap(a => a.물품목록.map(i => i.설치장소.split(" ")[0]))
-      ));
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
-      return {
-        id: Math.random().toString(36).substr(2, 9),
-        scheduledDateTime: `${date} ${timeStr}`,
-        applications: apps,
-        isDispatched: false,
-        optimizedRoute,
-      };
-    });
-
-    saveTimeGroups([...timeGroups, ...newGroups]);
-    saveUnoptimized([]);
     setIsOptimizing(false);
   };
 
@@ -406,17 +421,16 @@ export default function Home() {
   };
 
   // 서버 프리렌더 시각대와 브라우저 시각대 차이로 생기는 hydration 불일치를 피한다.
-  const currentWorkerNames = mounted ? getCurrentStaffNames() : [];
   const authUser = mounted ? getStoredAuthUser() : null;
   // 서버가 조직 내 작업자만 반환하므로 관리자 이름이 고정 시간표에 있어도 섞이지 않는다.
   const visibleWorkerNames = workerStatuses.map((status) => status.worker_name);
   const statusByWorker = new Map(workerStatuses.map((status) => [status.worker_name, status]));
-  const serverTodaySlots = useMemo(() => groupAdminSchedules(todaySchedules), [todaySchedules]);
+  const serverUpcomingSlots = useMemo(() => groupAdminSchedules(todaySchedules), [todaySchedules]);
 
   const openAdminDispatch = async (slot: AdminTodaySlot) => {
     if (slot.assignedWorkers.length === 0) {
       setStaffingMessage("먼저 해당 출동의 작업자를 배정해 주세요.");
-      document.getElementById("admin-staffing")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      document.getElementById("admin-worker-status")?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
     setOpeningDispatch(slot.dispatchTime);
@@ -486,10 +500,15 @@ export default function Home() {
     setStaffingLoading(true);
     setStaffingMessage(null);
     try {
-      const proposals = await staffingRecommendationsToday();
+      const proposals = await staffingRecommendationsUpcoming();
       setStaffingProposals(proposals);
       setStaffingSelections(Object.fromEntries(
-        proposals.map((proposal) => [proposal.dispatch_time, proposal.recommended_workers]),
+        proposals.map((proposal) => [
+          proposal.dispatch_time,
+          proposal.confirmed_workers.length > 0
+            ? proposal.confirmed_workers
+            : proposal.recommended_workers,
+        ]),
       ));
     } catch (previewError) {
       setStaffingMessage(`추천안을 불러오지 못했습니다: ${String(previewError)}`);
@@ -521,12 +540,15 @@ export default function Home() {
     setStaffingMessage(null);
     try {
       await confirmStaffingRecommendation(proposal, selected);
-      await dispatchConfirm(selected.length, proposal.dispatch_time);
       setStaffingProposals((current) => current?.map((item) => (
         item.dispatch_time === proposal.dispatch_time ? { ...item, confirmed_workers: selected } : item
       )) ?? null);
       await refreshTodaySchedules();
-      setStaffingMessage("인원 배정과 출동 동선을 확정했습니다. 배정된 작업자의 오늘 화면에 일정이 표시됩니다.");
+      setStaffingMessage(
+        proposal.confirmed_workers.length > 0
+          ? "선택 인원을 다시 확정하고 출동 동선을 재최적화했습니다."
+          : "인원 배정과 출동 동선을 확정했습니다. 배정된 작업자의 오늘 화면에 일정이 표시됩니다.",
+      );
     } catch (confirmError) {
       setStaffingMessage(`확정하지 못했습니다: ${String(confirmError)}`);
     } finally {
@@ -534,11 +556,146 @@ export default function Home() {
     }
   };
 
+  const refreshWorkerStatusPanel = async () => {
+    if (workerStatusLoading) return;
+    setWorkerStatusLoading(true);
+    try {
+      setWorkerStatuses(await workersStatusToday());
+    } catch (statusError) {
+      console.warn("[admin] 작업자 상태 새로고침 실패", statusError);
+    } finally {
+      setWorkerStatusLoading(false);
+    }
+  };
+
   return (
     <main className="app-screen font-pretendard flex-1 overflow-x-hidden px-4 pb-44 pt-safe-top">
 
+      {/* 출동관리 — 제공된 모바일 시안의 헤더/일정 카드 구조 */}
+      <header className="-mx-4 bg-[#ebf4ff] px-5 pb-3 pt-3">
+        <div className="flex h-[30px] items-center justify-between">
+          <h1 className="text-lg font-bold leading-none text-[#1f2937]">출동관리</h1>
+          <button
+            type="button"
+            onClick={() => document.getElementById("admin-worker-status")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            className="flex h-[22px] items-center gap-1 rounded-md bg-[#f3f4f6] px-2 text-xs font-medium text-[#4b5563] transition-colors active:bg-[#e5e7eb]"
+            aria-label={`작업자 상태 보기, ${staff.count}명 근무`}
+          >
+            {staff.count}명 근무
+          </button>
+        </div>
+        <div className="mt-1.5 flex min-h-[18px] items-center gap-1.5 text-xs font-medium text-[#9ca3af]">
+          <span>{mounted ? time.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "short" }) : "--"}</span>
+          <span>•</span>
+          <span className="tabular-nums">{mounted ? time.toLocaleTimeString("ko-KR") : "--:--:--"} 기준</span>
+          {authUser?.organization_entry_code && (
+            <span className="ml-auto font-mono text-[15px] font-bold tracking-[0.04em] text-[#0043ff]">
+              {authUser.organization_entry_code}
+            </span>
+          )}
+        </div>
+      </header>
+
+      <section className="surface-card mt-4 p-4 shadow-[0_4px_12px_rgba(31,41,55,0.04)]">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Truck className="h-5 w-5 text-[#0043ff]" />
+            <h2 className="text-base font-bold text-[#1f2937]">예정 수거 일정</h2>
+          </div>
+          <button
+            type="button"
+            onClick={() => { setTodaySchedulesLoading(true); void refreshTodaySchedules(); }}
+            className="flex h-[26px] shrink-0 items-center gap-1 rounded-lg bg-[#f3f4f6] px-2.5 text-xs font-semibold text-[#4b5563]"
+          >
+            <RefreshCw className={`h-3 w-3 ${todaySchedulesLoading ? "animate-spin" : ""}`} />
+            새로고침
+          </button>
+        </div>
+        <p className="mt-4 text-xs leading-[1.4] text-[#4b5563]">
+          관리자는 전체 일정을 확인하고 인원 배정 후 작업자와 동일한 출동 과정·네비게이션을 열 수 있습니다.
+        </p>
+
+        {todaySchedulesError && (
+          <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-600">{todaySchedulesError}</p>
+        )}
+
+        <div className="mt-4 space-y-3">
+          {serverUpcomingSlots.map((slot) => {
+            const dispatchDate = new Date(slot.dispatchTime);
+            const buildings = Array.from(new Set(slot.rows.map(scheduleBuildingName)));
+            const assigned = slot.assignedWorkers.length > 0;
+            return (
+              <article key={slot.dispatchTime} className="rounded-xl bg-[#f3f4f6] p-3.5">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-[15px] font-bold text-[#1f2937]">
+                    {Number.isNaN(dispatchDate.getTime())
+                      ? slot.dispatchTime
+                      : `${dispatchDate.toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" })} ${dispatchDate.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}`} 출동
+                  </h3>
+                  <span className={`rounded-md px-2 py-1 text-[11px] font-bold ${
+                    assigned ? "bg-[#e1fbf0] text-[#059669]" : "bg-[#fef3c7] text-[#b45309]"
+                  }`}>
+                    {assigned ? "배정 완료" : "배정 대기"}
+                  </span>
+                </div>
+
+                <div className="mt-3 flex items-center gap-3 text-xs">
+                  <span className="text-[#9ca3af]">신청 <b className="ml-1 text-[#1f2937]">{new Set(slot.rows.map((row) => row.신청번호)).size}건</b></span>
+                  <span className="h-2.5 w-px bg-[#e5e7eb]" />
+                  <span className="text-[#9ca3af]">필요 인원 <b className="ml-1 text-[#0043ff]">{slot.requiredPersonnel}명</b></span>
+                </div>
+
+                <div className="mt-3">
+                  <p className="mb-2 text-[11px] font-semibold text-[#4b5563]">경로 순서</p>
+                  <ol className="space-y-1.5">
+                    {buildings.map((building, index) => (
+                      <li key={`${building}-${index}`} className="flex min-h-4 items-center gap-2 text-[13px] font-medium text-[#1f2937]">
+                        <span className={`mx-1 size-2 shrink-0 rounded-full ${index === buildings.length - 1 ? "bg-[#0043ff]" : "bg-[#9ca3af]"}`} />
+                        <span>{building}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+
+                {assigned ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-1.5 rounded-lg border border-[#d5f5e7] bg-[#f0fdf8] px-2.5 py-2 text-xs text-[#047857]">
+                    <Users className="h-4 w-4" />
+                    <span className="font-medium">{slot.assignedWorkers.join(", ")} 배정</span>
+                  </div>
+                ) : (
+                  <div className="mt-3 flex items-center gap-2 rounded-lg border border-[#fef3c7] bg-[#fffbeb] p-2.5 text-xs font-medium text-[#b45309]">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    아직 작업자가 배정되지 않았습니다.
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => void openAdminDispatch(slot)}
+                  disabled={openingDispatch === slot.dispatchTime}
+                  className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#0043ff] px-4 text-[13px] font-bold text-white shadow-[0_4px_8px_rgba(0,67,255,0.12)] disabled:opacity-50"
+                >
+                  {openingDispatch === slot.dispatchTime
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : assigned ? <Navigation className="h-4 w-4" /> : <Users className="h-4 w-4" />}
+                  {assigned ? "출동 과정·네비게이션 보기" : "인원 배정하기"}
+                </button>
+              </article>
+            );
+          })}
+          {!todaySchedulesLoading && serverUpcomingSlots.length === 0 && (
+            <p className="rounded-lg bg-[#f3f4f6] p-4 text-center text-xs font-medium text-[#4b5563]">오늘 이후 등록된 수거 일정이 없습니다.</p>
+          )}
+          {todaySchedulesLoading && serverUpcomingSlots.length === 0 && (
+            <div className="flex items-center justify-center gap-2 py-8 text-xs text-[#9ca3af]">
+              <Loader2 className="h-4 w-4 animate-spin" /> 일정을 불러오는 중입니다.
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* ── 헤더 ── */}
-      <header className="pt-6 pb-6">
+      <header className="hidden">
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-xl font-extrabold tracking-tight text-[#1f2937]">{authUser?.organization_name ?? "관재 조직"}</h1>
@@ -584,7 +741,7 @@ export default function Home() {
       </header>
 
       {/* 서버 기준 금일 전체 출동 일정 */}
-      <section className="surface-card mb-7 p-4">
+      <section className="hidden">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
@@ -609,7 +766,7 @@ export default function Home() {
           <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-600">{todaySchedulesError}</p>
         )}
         <div className="mt-4 space-y-3">
-          {serverTodaySlots.map((slot) => {
+          {serverUpcomingSlots.map((slot) => {
             const time = new Date(slot.dispatchTime);
             const buildings = Array.from(new Set(slot.rows.map(scheduleBuildingName)));
             const assigned = slot.assignedWorkers.length > 0;
@@ -654,10 +811,10 @@ export default function Home() {
               </div>
             );
           })}
-          {!todaySchedulesLoading && serverTodaySlots.length === 0 && (
+          {!todaySchedulesLoading && serverUpcomingSlots.length === 0 && (
             <p className="rounded-xl bg-slate-50 p-4 text-center text-xs text-slate-500">오늘 등록된 수거 일정이 없습니다.</p>
           )}
-          {todaySchedulesLoading && serverTodaySlots.length === 0 && (
+          {todaySchedulesLoading && serverUpcomingSlots.length === 0 && (
             <div className="flex items-center justify-center gap-2 py-6 text-xs text-slate-400">
               <Loader2 className="h-4 w-4 animate-spin" /> 일정을 불러오는 중입니다.
             </div>
@@ -665,211 +822,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* 실제 작업 기록 기반 상태와 관리자 확정형 인원 추천 */}
-      <section className="mb-7 space-y-4">
-        <div className="surface-card rounded-2xl p-4 text-[#1f2937]">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <Activity className="h-4 w-4 text-[#0043ff]" />
-                <h2 className="text-sm font-bold">작업자 상태</h2>
-              </div>
-              <p className="mt-1 text-[11px] leading-relaxed text-[#4b5563]">
-                작업 전에는 테스트 초기값 또는 최근 상태를, 출동 후에는 오늘의 실제·예측값을 보여줍니다.
-              </p>
-            </div>
-            {workerStatusLoading && <Loader2 className="h-4 w-4 animate-spin text-slate-300" />}
-          </div>
-
-          <div className="mt-4 flex flex-col gap-3 rounded-xl bg-[#f3f4f6] p-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-xs font-bold text-[#1f2937]">사전 데이터로 개인 모델 학습</p>
-              <p className="mt-1 text-[10px] leading-relaxed text-slate-400">
-                CSV·JSON·XLSX 파일을 올리면 공통 모델과 작업자별 모델을 즉시 갱신합니다.
-              </p>
-            </div>
-            <input
-              ref={fatigueDatasetInputRef}
-              type="file"
-              accept=".csv,.json,.xlsx"
-              className="hidden"
-              onChange={handleFatigueDatasetChange}
-            />
-            <button
-              type="button"
-              onClick={() => fatigueDatasetInputRef.current?.click()}
-              disabled={fatigueDatasetTraining}
-              className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-white px-3 py-2 text-[11px] font-bold text-[#0043ff] disabled:opacity-50"
-            >
-              {fatigueDatasetTraining
-                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                : <Upload className="h-3.5 w-3.5" />}
-              {fatigueDatasetTraining ? "학습 중" : "데이터셋 선택"}
-            </button>
-          </div>
-          {fatigueDatasetResult && (
-            <p className="mt-2 rounded-lg bg-emerald-400/15 px-3 py-2 text-[10px] text-emerald-200">
-              {fatigueDatasetResult.row_count}행 학습 완료 · 개인 모델 {fatigueDatasetResult.personal_model_count}명
-              {fatigueDatasetResult.skipped_personal_models.length > 0
-                ? ` · 데이터 부족 등으로 ${fatigueDatasetResult.skipped_personal_models.length}명 제외`
-                : ""}
-            </p>
-          )}
-          {fatigueDatasetError && (
-            <p className="mt-2 rounded-lg bg-red-400/15 px-3 py-2 text-[10px] text-red-200">
-              학습 실패: {fatigueDatasetError}
-            </p>
-          )}
-
-          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {visibleWorkerNames.map((name) => {
-              const status = statusByWorker.get(name);
-              const isCurrent = currentWorkerNames.includes(name);
-              const effectiveBorg = status?.state_borg_cr10 ?? null;
-              const sourceLabel = !status ? "확인 중"
-                : status.state_source === "actual_today" ? "오늘 실제 응답"
-                  : status.state_source === "predicted_today" ? "오늘 모델 예측"
-                    : status.state_source === "last_actual" ? "최근 실제 응답"
-                      : status.state_source === "last_predicted" ? "최근 모델 예측"
-                        : status.state_source === "test_seed" ? "테스트 초기값"
-                          : status.state_source === "model_baseline" ? "모델 초기값"
-                            : "측정 전";
-              const condition = effectiveBorg == null
-                ? { label: "데이터 없음", color: "bg-white/10 text-slate-300" }
-                : effectiveBorg >= 7
-                  ? { label: "위험", color: "bg-red-100 text-red-600" }
-                  : effectiveBorg >= 4
-                    ? { label: "주의", color: "bg-amber-100 text-amber-700" }
-                    : { label: "양호", color: "bg-emerald-100 text-emerald-600" };
-              return (
-                <div key={name} className="rounded-xl border border-[#e5e7eb] bg-white p-3 shadow-[0_4px_8px_rgba(31,41,55,0.03)]">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-bold">{name}</p>
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${condition.color}`}>
-                      {condition.label}{isCurrent ? " · 가용" : ""}
-                    </span>
-                  </div>
-                  {status ? (
-                    <>
-                      <div className="mt-2 grid grid-cols-4 gap-2 text-center">
-                        <div><p className="text-[10px] text-slate-400">작업</p><p className="mt-0.5 text-xs font-bold">{Math.round(status.total_work_seconds / 60)}분</p></div>
-                        <div><p className="text-[10px] text-slate-400">실제 Borg</p><p className="mt-0.5 text-xs font-bold">{status.latest_actual_borg_cr10 ?? "-"}</p></div>
-                        <div><p className="text-[10px] text-slate-400">상태 참고값</p><p className="mt-0.5 text-xs font-bold">{status.state_borg_cr10 ?? "-"}</p></div>
-                        <div><p className="text-[10px] text-slate-400">누적부하</p><p className="mt-0.5 text-xs font-bold">{status.daily_load}</p></div>
-                      </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
-                        <span className="rounded-full bg-white/10 px-2 py-1 text-slate-200">{sourceLabel}</span>
-                        {status.membership_status === "roster_only" && (
-                          <span className="rounded-full bg-sky-400/15 px-2 py-1 text-sky-200">계정 가입 전</span>
-                        )}
-                      </div>
-                      <p className="mt-2 text-[10px] text-slate-400">
-                        {status.model_ready
-                          ? `개인 모델 활성 · 최근 검증 MAE ${status.validation_mae ?? "-"}`
-                          : `개인 모델 학습 중 · 실제 응답 ${status.actual_response_count}/8`}
-                        {status.state_scope === "initial" ? " · 실제 작업 후 갱신" : ""}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="mt-2 text-[11px] text-slate-400">오늘 완료된 작업 데이터가 없습니다.</p>
-                  )}
-                </div>
-              );
-            })}
-            {!workerStatusLoading && visibleWorkerNames.length === 0 && (
-              <p className="text-xs text-slate-400">조직에 등록된 작업자와 인원표가 없습니다.</p>
-            )}
-          </div>
-          <p className="mt-3 text-[10px] text-slate-400">
-            테스트 초기값은 화면과 배정 흐름을 확인하기 위한 참고값이며 실제 응답으로 계산하지 않습니다. 누적부하는 당일 실제 작업만 반영합니다.
-          </p>
-        </div>
-
-        <div id="admin-staffing" className="surface-card scroll-mt-4 p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-indigo-500" />
-                <h2 className="text-sm font-bold text-slate-900">다음 출동 인원 참고안</h2>
-              </div>
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                미리보기는 일정을 바꾸지 않습니다. 관리자가 인원을 검토하고 확정해야 기록됩니다.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={loadStaffingPreview}
-              disabled={staffingLoading}
-              className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[#0043ff] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-50"
-            >
-              {staffingLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-              추천안 보기
-            </button>
-          </div>
-
-          {staffingProposals && (
-            <div className="mt-4 space-y-3">
-              {staffingProposals.map((proposal) => {
-                const selected = staffingSelections[proposal.dispatch_time] ?? proposal.recommended_workers;
-                const selectionValid = selected.length === proposal.team_size;
-                return (
-                  <div key={proposal.dispatch_time} className="rounded-xl bg-slate-50 p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <p className="text-xs font-bold text-slate-800">
-                          {new Date(proposal.dispatch_time).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 출동
-                        </p>
-                        <p className="mt-0.5 text-[10px] text-slate-500">
-                          필요 {proposal.required_team_size}명 · 선택 {proposal.team_size}명 · 신청 {proposal.application_numbers.length}건
-                        </p>
-                        {proposal.required_team_size > proposal.team_size && (
-                          <p className="mt-1 text-[10px] font-bold text-amber-600">가용 인원이 {proposal.required_team_size - proposal.team_size}명 부족합니다.</p>
-                        )}
-                      </div>
-                      {proposal.confirmed_workers.length > 0 && (
-                        <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-bold text-emerald-700">관리자 확정</span>
-                      )}
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {proposal.worker_details.map((worker) => {
-                        const checked = selected.includes(worker.worker_name);
-                        return (
-                          <button
-                            key={worker.worker_name}
-                            type="button"
-                            onClick={() => toggleStaffingWorker(proposal, worker.worker_name)}
-                            className={`rounded-xl border px-3 py-2 text-left ${checked ? "border-indigo-500 bg-indigo-50" : "border-slate-200 bg-white"}`}
-                          >
-                            <p className={`text-xs font-bold ${checked ? "text-indigo-700" : "text-slate-700"}`}>{worker.worker_name}</p>
-                            <p className="mt-0.5 text-[10px] text-slate-400">{worker.reason}</p>
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <div className="mt-3 flex items-center justify-between gap-3">
-                      <p className={`text-[10px] ${selectionValid ? "text-slate-500" : "font-bold text-amber-600"}`}>
-                        {selected.length}/{proposal.team_size}명 선택
-                      </p>
-                      <button
-                        type="button"
-                        disabled={!selectionValid || confirmingProposal === proposal.dispatch_time}
-                        onClick={() => confirmStaffing(proposal)}
-                        className="rounded-xl bg-slate-900 px-3 py-2 text-[11px] font-bold text-white disabled:opacity-40"
-                      >
-                        {confirmingProposal === proposal.dispatch_time ? "확정 중…" : "선택 인원 확정"}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-              {staffingProposals.length === 0 && (
-                <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">오늘 남은 출동 일정이 없습니다.</p>
-              )}
-            </div>
-          )}
-          {staffingMessage && <p className="mt-3 text-[11px] leading-relaxed text-slate-600">{staffingMessage}</p>}
-        </div>
-      </section>
 
       {/* ── Section 1: 미최적화 신청서 ── */}
       {unoptimizedApps.length > 0 && (
@@ -940,7 +892,7 @@ export default function Home() {
 
       {/* ── Section 2: 출동 시간 그룹 ── */}
       {timeGroups.length > 0 && (
-        <section className="mb-7">
+        <section className="hidden">
           <div className="flex items-center gap-2 mb-3">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">출동 일정</span>
             <span className="text-[11px] font-bold bg-indigo-500 text-white px-2 py-0.5 rounded-full">
@@ -1060,7 +1012,7 @@ export default function Home() {
       {unoptimizedApps.length === 0 && timeGroups.length === 0 && (
         <motion.div
           initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-          className="flex flex-col items-center justify-center py-20 text-center"
+          className="hidden"
         >
           <div className="w-20 h-20 rounded-3xl bg-white flex items-center justify-center mb-5 shadow-sm">
             <Package className="w-10 h-10 text-indigo-300" />
@@ -1101,6 +1053,207 @@ export default function Home() {
           </button>
         </div>
       </div>
+
+      {/* 작업자 상태 — 관리자 페이지 안에서 바로 확인 */}
+      <section id="admin-worker-status" className="-mx-4 mt-4 mb-7 scroll-mt-4 bg-[#ebf4ff] px-4 pb-10 pt-4">
+        <div className="mb-3 flex h-10 items-center justify-between px-1">
+          <h2 className="text-[20px] font-bold leading-6 text-[#1f2937]">작업자 상태</h2>
+          <button
+            type="button"
+            onClick={() => void refreshWorkerStatusPanel()}
+            disabled={workerStatusLoading}
+            className="flex size-8 items-center justify-center rounded-full text-[#1f2937] active:bg-white/60 disabled:opacity-50"
+            aria-label="작업자 상태 새로고침"
+          >
+            <RefreshCw className={`size-5 ${workerStatusLoading ? "animate-spin" : ""}`} strokeWidth={2.2} />
+          </button>
+        </div>
+
+        <div>
+              <div className="space-y-3">
+                {visibleWorkerNames.map((name) => {
+                  const status = statusByWorker.get(name);
+                  const condition = workerCondition(status?.state_borg_cr10);
+                  return (
+                    <article key={name} className="min-h-[157px] overflow-hidden rounded-2xl bg-white shadow-[0_4px_8px_rgba(31,41,55,0.03)]">
+                      <div className={`flex h-[46px] items-center gap-2.5 px-4 ${condition.bannerClass}`}>
+                        <span className="flex size-[30px] shrink-0 items-center justify-center overflow-hidden" aria-hidden="true">
+                          {condition.iconSrc ? (
+                            <Image src={condition.iconSrc} alt="" width={27} height={27} className="size-[27px]" />
+                          ) : (
+                            <span className="flex size-[27px] items-center justify-center rounded-full bg-slate-300 text-sm font-bold text-white">—</span>
+                          )}
+                        </span>
+                        <span className={`text-[18px] font-bold leading-[21px] ${condition.textClass}`}>{condition.label}</span>
+                      </div>
+                      <div className="flex flex-col gap-4 p-4">
+                        <h3 className="text-[18px] font-bold leading-[21px] text-[#1f2937]">{name}</h3>
+                        <div className="grid grid-cols-4 gap-2">
+                          <div className="flex min-w-0 flex-col items-center gap-1 text-center">
+                            <p className="whitespace-nowrap text-[14px] font-semibold leading-[17px] text-[#9ca3af]">작업 시간</p>
+                            <p className="flex items-baseline gap-0.5 text-[18px] font-bold leading-[21px] text-[#1f2937]">
+                              {status ? Math.round(status.total_work_seconds / 60) : 0}<span className="text-[12px] font-normal text-[#4b5563]">분</span>
+                            </p>
+                          </div>
+                          <div className="flex min-w-0 flex-col items-center gap-1 text-center">
+                            <p className="whitespace-nowrap text-[14px] font-semibold leading-[17px] text-[#9ca3af]">몸 피로</p>
+                            <p className="text-[16px] font-bold leading-[19px] text-[#1f2937]">{status?.latest_actual_borg_cr10 ?? "-"}</p>
+                          </div>
+                          <div className="flex min-w-0 flex-col items-center gap-1 text-center">
+                            <p className="whitespace-nowrap text-[14px] font-semibold leading-[17px] text-[#9ca3af]">상태 참고값</p>
+                            <p className="text-[16px] font-bold leading-[19px] text-[#1f2937]">{status?.state_borg_cr10 ?? "-"}</p>
+                          </div>
+                          <div className="flex min-w-0 flex-col items-center gap-1 text-center">
+                            <p className="whitespace-nowrap text-[14px] font-semibold leading-[17px] text-[#9ca3af]">누적 피로</p>
+                            <p className="text-[16px] font-bold leading-[19px] text-[#1f2937]">{status?.daily_load ?? 0}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-2 border-t border-[#f1f5f9] pt-3 text-[13px]">
+                          <p className="shrink-0 font-semibold text-[#9ca3af]">최근 불편 부위</p>
+                          <p className="min-w-0 text-right font-bold text-[#1f2937]">
+                            {status?.latest_body_discomfort_parts == null
+                              ? "미확인"
+                              : status.latest_body_discomfort_parts.length > 0
+                                ? status.latest_body_discomfort_parts.join(", ")
+                                : "없음"}
+                          </p>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+
+                {workerStatusLoading && visibleWorkerNames.length === 0 && (
+                  <div className="flex items-center justify-center gap-2 rounded-2xl bg-white py-10 text-xs text-[#9ca3af]">
+                    <Loader2 className="size-4 animate-spin" /> 작업자 상태를 불러오는 중입니다.
+                  </div>
+                )}
+                {!workerStatusLoading && visibleWorkerNames.length === 0 && (
+                  <div className="rounded-2xl bg-white px-4 py-10 text-center text-xs text-[#4b5563]">
+                    조직에 등록된 작업자와 인원표가 없습니다.
+                  </div>
+                )}
+              </div>
+
+              <div className="px-1 py-3 text-[11px] leading-[1.4] text-[#9ca3af]">
+                <p>* 테스트 초기값은 화면과 배정 흐름을 확인하기 위한 참고값이며 실제 응답으로 계산하지 않습니다.</p>
+                <p className="mt-1.5">* 누적부하는 당일 실제 작업만 반영합니다.</p>
+              </div>
+
+              <section id="admin-staffing" className="rounded-2xl bg-white p-5 shadow-[0_4px_16px_rgba(31,41,55,0.03)]">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="size-[18px] text-[#0043ff]" />
+                    <h3 className="text-[16px] font-bold leading-[19px] text-[#1f2937]">다음 출동 인원 참고안</h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={loadStaffingPreview}
+                    disabled={staffingLoading}
+                    className="flex h-[30px] shrink-0 items-center gap-1 rounded-lg bg-[#0043ff] px-3 text-[12px] font-bold text-white disabled:opacity-50"
+                  >
+                    {staffingLoading && <Loader2 className="size-3.5 animate-spin" />}
+                    추천안 보기
+                  </button>
+                </div>
+                <p className="mt-4 text-[12px] leading-[1.4] text-[#4b5563]">
+                  미리보기는 일정을 바꾸지 않습니다. 관리자가 인원을 검토하고 확정해야 기록됩니다.
+                </p>
+
+                {staffingProposals && (
+                  <div className="mt-4 space-y-3">
+                    {staffingProposals.map((proposal) => {
+                      const selected = staffingSelections[proposal.dispatch_time] ?? proposal.recommended_workers;
+                      const selectionValid = selected.length === proposal.team_size;
+                      return (
+                        <div key={proposal.dispatch_time} className="rounded-xl bg-[#f3f4f6] p-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-xs font-bold text-[#1f2937]">
+                                {new Date(proposal.dispatch_time).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 출동
+                              </p>
+                              <p className="mt-1 text-[10px] text-[#4b5563]">
+                                필요 {proposal.required_team_size}명 · 선택 {selected.length}/{proposal.team_size}명 · 신청 {proposal.application_numbers.length}건
+                              </p>
+                            </div>
+                            {proposal.confirmed_workers.length > 0 && (
+                              <span className="shrink-0 rounded-md bg-[#e1fbf0] px-2 py-1 text-[10px] font-bold text-[#059669]">확정</span>
+                            )}
+                          </div>
+                          {proposal.required_team_size > proposal.team_size && (
+                            <p className="mt-2 text-[10px] font-bold text-[#b45309]">가용 인원이 {proposal.required_team_size - proposal.team_size}명 부족합니다.</p>
+                          )}
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            {proposal.worker_details.map((worker) => {
+                              const checked = selected.includes(worker.worker_name);
+                              return (
+                                <button
+                                  key={worker.worker_name}
+                                  type="button"
+                                  disabled={!worker.available}
+                                  onClick={() => toggleStaffingWorker(proposal, worker.worker_name)}
+                                  className={`rounded-lg border px-3 py-2 text-left ${checked ? "border-[#0043ff] bg-[#ebf4ff]" : "border-[#e5e7eb] bg-white"} disabled:cursor-not-allowed disabled:opacity-50`}
+                                >
+                                  <div className="flex items-center justify-between gap-1">
+                                    <p className={`text-xs font-bold ${checked ? "text-[#0043ff]" : "text-[#1f2937]"}`}>{worker.worker_name}</p>
+                                    {!worker.available && <span className="text-[9px] font-bold text-[#9ca3af]">배정 불가</span>}
+                                  </div>
+                                  <p className="mt-0.5 line-clamp-2 text-[10px] leading-snug text-[#9ca3af]">{worker.reason}</p>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <button
+                            type="button"
+                            disabled={!selectionValid || confirmingProposal === proposal.dispatch_time}
+                            onClick={() => confirmStaffing(proposal)}
+                            className="mt-3 h-9 w-full rounded-lg bg-[#1f2937] px-3 text-[11px] font-bold text-white disabled:opacity-40"
+                          >
+                            {confirmingProposal === proposal.dispatch_time
+                              ? (proposal.confirmed_workers.length > 0 ? "재최적화 중…" : "확정 중…")
+                              : (proposal.confirmed_workers.length > 0 ? "선택 인원 재확정·재최적화" : "선택 인원 확정")}
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {staffingProposals.length === 0 && (
+                      <p className="rounded-lg bg-[#f3f4f6] p-3 text-center text-xs font-medium text-[#4b5563]">오늘 남은 출동 일정이 없습니다.</p>
+                    )}
+                  </div>
+                )}
+                {staffingMessage && <p className="mt-3 text-[11px] leading-relaxed text-[#4b5563]">{staffingMessage}</p>}
+              </section>
+
+              <details className="mt-3 rounded-2xl bg-white p-4 text-[#1f2937]">
+                <summary className="cursor-pointer text-xs font-bold">피로도 모델 데이터 관리</summary>
+                <p className="mt-2 text-[10px] leading-relaxed text-[#9ca3af]">CSV·JSON·XLSX 파일로 공통 모델과 작업자별 모델을 갱신합니다.</p>
+                <input
+                  ref={fatigueDatasetInputRef}
+                  type="file"
+                  accept=".csv,.json,.xlsx"
+                  className="hidden"
+                  onChange={handleFatigueDatasetChange}
+                />
+                <button
+                  type="button"
+                  onClick={() => fatigueDatasetInputRef.current?.click()}
+                  disabled={fatigueDatasetTraining}
+                  className="mt-3 flex h-9 items-center justify-center gap-1.5 rounded-lg bg-[#f3f4f6] px-3 text-[11px] font-bold text-[#0043ff] disabled:opacity-50"
+                >
+                  {fatigueDatasetTraining ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
+                  {fatigueDatasetTraining ? "학습 중" : "데이터셋 선택"}
+                </button>
+                {fatigueDatasetResult && (
+                  <p className="mt-2 rounded-lg bg-[#e1fbf0] px-3 py-2 text-[10px] text-[#047857]">
+                    {fatigueDatasetResult.row_count}행 학습 완료 · 개인 모델 {fatigueDatasetResult.personal_model_count}명
+                  </p>
+                )}
+                {fatigueDatasetError && (
+                  <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[10px] text-red-600">학습 실패: {fatigueDatasetError}</p>
+                )}
+              </details>
+        </div>
+      </section>
 
       {/* ── 신청서 촬영 바텀 시트 ── */}
       <AnimatePresence>

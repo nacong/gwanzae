@@ -227,14 +227,27 @@ export async function createApplicationFromOcr(
 
 /* ─── 일정 / 최적화 / 출동 ───────────────────────────────────── */
 
-export async function optimizeRun(): Promise<unknown> {
+export type OptimizeRunResult = {
+  optimize_run_id: string;
+  대상_신청서수: number;
+  일정확정_신청서: string[];
+  미배정_신청서: string[];
+  일정_행수: number;
+};
+
+export async function optimizeRun(): Promise<OptimizeRunResult> {
   const res = await fetch(`${API_BASE}/optimize/run`, { method: "POST", headers: headers(false) });
-  return handle<unknown>(res, "POST /optimize/run");
+  return handle<OptimizeRunResult>(res, "POST /optimize/run");
 }
 
 export async function schedulesToday(): Promise<Schedule[]> {
   const res = await fetch(`${API_BASE}/schedules/today`, { headers: headers(false) });
   return handle<Schedule[]>(res, "GET /schedules/today");
+}
+
+export async function schedulesUpcoming(): Promise<Schedule[]> {
+  const res = await fetch(`${API_BASE}/schedules/upcoming`, { headers: headers(false) });
+  return handle<Schedule[]>(res, "GET /schedules/upcoming");
 }
 
 export type DispatchConfirmSlot = {
@@ -272,6 +285,8 @@ export async function updateSchedule(scheduleId: number, patch: SchedulePatch): 
 
 /* ─── 작업시간 / Borg / 관리자 추천 ─────────────────────────── */
 
+export type BodyDiscomfortPart = "목/어깨" | "팔꿈치" | "허리/등" | "손목" | "무릎" | "발목";
+
 export type WorkSessionCreate = {
   client_session_id: string;
   worker_name: string;
@@ -287,6 +302,7 @@ export type WorkSessionCreate = {
   gps_rejected_count: number;
   tracking_quality: "unavailable" | "poor" | "estimated";
   borg_cr10: number | null;
+  body_discomfort_parts?: BodyDiscomfortPart[];
   team_size?: number;
 };
 
@@ -391,6 +407,7 @@ export type WorkerTodayStatus = {
   state_scope: "today" | "last_known" | "initial" | "unmeasured";
   state_updated_at: string | null;
   model_source: "test_seed" | "operational" | "dataset_import" | null;
+  latest_body_discomfort_parts: BodyDiscomfortPart[] | null;
 };
 
 export async function workersStatusToday(): Promise<WorkerTodayStatus[]> {
@@ -401,6 +418,7 @@ export async function workersStatusToday(): Promise<WorkerTodayStatus[]> {
 export type StaffingWorkerDetail = {
   worker_name: string;
   recommended: boolean;
+  available: boolean;
   reason: string;
 };
 
@@ -420,6 +438,11 @@ export type StaffingProposal = {
 export async function staffingRecommendationsToday(): Promise<StaffingProposal[]> {
   const res = await fetch(`${API_BASE}/staffing/recommendations/today`, { headers: headers(false) });
   return handle<StaffingProposal[]>(res, "GET /staffing/recommendations/today");
+}
+
+export async function staffingRecommendationsUpcoming(): Promise<StaffingProposal[]> {
+  const res = await fetch(`${API_BASE}/staffing/recommendations/upcoming`, { headers: headers(false) });
+  return handle<StaffingProposal[]>(res, "GET /staffing/recommendations/upcoming");
 }
 
 export async function confirmStaffingRecommendation(
