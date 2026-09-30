@@ -1,6 +1,8 @@
 "use client";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+import { getApiBase } from "@/lib/api-config";
+
+const API_BASE = getApiBase();
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
 
 export const AUTH_TOKEN_KEY = "gwanzae-access-token";

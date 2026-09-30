@@ -1,8 +1,9 @@
 // API 클라이언트 — openapi.yaml (X-API-Key 인증) 기준
 
 import { clearAuth, getStoredToken } from "@/lib/auth";
+import { getApiBase } from "@/lib/api-config";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+const API_BASE = getApiBase();
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
 
 /* ─── 진단 로그 ──────────────────────────────────────────────────
@@ -473,7 +474,12 @@ export type NavigationProgress = {
 
 export async function getNavigationProgress(dispatchTime: string): Promise<NavigationProgress> {
   const query = new URLSearchParams({ dispatch_time: dispatchTime });
-  const res = await fetch(`${API_BASE}/navigation/progress?${query}`, { headers: headers(false) });
+  // 여러 기기가 1초 간격으로 읽는 현재 상태이므로 브라우저/중간 캐시의
+  // 이전 응답을 재사용하면 안 된다.
+  const res = await fetch(`${API_BASE}/navigation/progress?${query}`, {
+    headers: headers(false),
+    cache: "no-store",
+  });
   return handle<NavigationProgress>(res, "GET /navigation/progress");
 }
 

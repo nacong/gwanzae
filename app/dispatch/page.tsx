@@ -734,6 +734,28 @@ function TrackingStatus({ tracking }: { tracking: WorkTrackingSnapshot }) {
   );
 }
 
+type NavigationSyncState = "connecting" | "connected" | "retrying";
+
+function NavigationSyncStatus({ state }: { state: NavigationSyncState }) {
+  const label = state === "connected"
+    ? "화면 연동됨"
+    : state === "retrying"
+      ? "연동 재시도 중"
+      : "화면 연결 중";
+  const dotClass = state === "connected"
+    ? "bg-[#16a34a]"
+    : state === "retrying"
+      ? "bg-[#f59e0b]"
+      : "animate-pulse bg-[#60a5fa]";
+
+  return (
+    <div className="pointer-events-none fixed left-4 top-[calc(64px+env(safe-area-inset-top))] z-40 flex items-center gap-2 rounded-full border border-white/70 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+      <span className={`size-2 rounded-full ${dotClass}`} />
+      <span className="text-[11px] font-bold text-[#475569]">{label}</span>
+    </div>
+  );
+}
+
 function FatiguePrompt({ workerName, saving, onAnswer }: {
   workerName: string;
   saving: boolean;
@@ -1153,6 +1175,7 @@ export default function DispatchPage() {
   const [fatiguePrediction, setFatiguePrediction] = useState<FatiguePrediction | null>(null);
   const [loggedInUser, setLoggedInUser] = useState<AuthUser | null>(null);
   const [finishing, setFinishing] = useState(false);
+  const [navigationSyncState, setNavigationSyncState] = useState<NavigationSyncState>("connecting");
   const lastPublishedNavigationRef = useRef<string | null>(null);
   const lastAppliedNavigationRevisionRef = useRef(-1);
   const remoteCompletionHandledRef = useRef(false);
@@ -1245,7 +1268,8 @@ export default function DispatchPage() {
     return ranges;
   }, [steps]);
 
-  // 관리자 화면의 현재 건물/스텝을 서버에 기록한다. 빠른 연속 클릭은 마지막 상태만 전송한다.
+  // 관리자 화면의 현재 건물/스텝을 서버에 기록한다. 전송 실패 시 같은 상태를
+  // 성공할 때까지 재시도해, 현장 네트워크가 잠깐 끊겨도 작업자 화면이 다시 따라온다.
   useEffect(() => {
     const activeScheduleId = buildings?.[buildingIdx]?.scheduleId;
     if (!isAdminViewer || !plan || !activeScheduleId || loading) return;
@@ -1253,21 +1277,34 @@ export default function DispatchPage() {
     if (lastPublishedNavigationRef.current === signature) return;
 
     let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void updateNavigationProgress({
-        dispatch_time: plan.출동일시,
-        phase,
-        active_schedule_id: activeScheduleId,
-        step_index: stepIdx,
-      }).then(() => {
-        if (!cancelled) lastPublishedNavigationRef.current = signature;
-      }).catch((syncError) => {
+    let timer: number | null = null;
+    setNavigationSyncState("connecting");
+
+    const publish = async () => {
+      try {
+        await updateNavigationProgress({
+          dispatch_time: plan.출동일시,
+          phase,
+          active_schedule_id: activeScheduleId,
+          step_index: stepIdx,
+        });
+        if (!cancelled) {
+          lastPublishedNavigationRef.current = signature;
+          setNavigationSyncState("connected");
+        }
+      } catch (syncError) {
         console.warn("[dispatch] 관리자 네비게이션 상태 공유 실패", syncError);
-      });
-    }, 120);
+        if (!cancelled) {
+          setNavigationSyncState("retrying");
+          timer = window.setTimeout(() => { void publish(); }, 1_000);
+        }
+      }
+    };
+
+    timer = window.setTimeout(() => { void publish(); }, 120);
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
+      if (timer != null) window.clearTimeout(timer);
     };
   }, [buildings, buildingIdx, isAdminViewer, loading, phase, plan, stepIdx]);
 
@@ -1279,7 +1316,9 @@ export default function DispatchPage() {
     const applyAdminProgress = async () => {
       try {
         const progress = await getNavigationProgress(plan.출동일시);
-        if (!active || progress.revision <= lastAppliedNavigationRevisionRef.current) return;
+        if (!active) return;
+        setNavigationSyncState("connected");
+        if (progress.revision <= lastAppliedNavigationRevisionRef.current) return;
         if (progress.phase === "completed") {
           lastAppliedNavigationRevisionRef.current = progress.revision;
           if (!remoteCompletionHandledRef.current) {
@@ -1305,6 +1344,7 @@ export default function DispatchPage() {
         }
       } catch (syncError) {
         console.warn("[dispatch] 관리자 네비게이션 상태 확인 실패", syncError);
+        if (active) setNavigationSyncState("retrying");
       } finally {
         // 느린 네트워크에서도 요청이 중첩되지 않도록 이전 응답 뒤에 다음 조회를 예약한다.
         if (active) timer = window.setTimeout(() => { void applyAdminProgress(); }, 1_000);
@@ -1375,6 +1415,7 @@ export default function DispatchPage() {
         <OverviewScreen plan={plan} currentIdx={currentStopIdx}
           onBack={() => router.push(homePath)} onStart={startNav} onSkip={startNav}
           following={!isAdminViewer} />
+        <NavigationSyncStatus state={navigationSyncState} />
         {!isAdminViewer && <TrackingStatus tracking={tracking} />}
       </>
     );
@@ -1633,6 +1674,7 @@ export default function DispatchPage() {
   return (
     <div className="font-pretendard fixed inset-0 overflow-hidden bg-[#f2f4f7]">
       <NavHeader title={headerTitle} contacts={contacts} onBack={() => setExitOpen(true)} />
+      <NavigationSyncStatus state={navigationSyncState} />
       {!isAdminViewer && <TrackingStatus tracking={tracking} />}
 
       {isPickup ? (
