@@ -1025,7 +1025,14 @@ export default function Home() {
       )}
 
       {/* ── 하단 고정 버튼 ── */}
-      <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileChange} />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={handleFileChange}
+      />
 
       <div className="fixed bottom-16 left-0 right-0 z-40 mx-auto w-full max-w-[430px] bg-gradient-to-t from-[#ebf4ff] via-[#ebf4ff]/95 to-transparent px-4 pb-3 pt-5">
         <div className="flex gap-3">
@@ -1319,7 +1326,12 @@ export default function Home() {
                         ))}
                       </div>
                     ) : (
-                      <div className="aspect-[4/3] bg-slate-100 rounded-2xl relative flex flex-col items-center justify-center gap-3 overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        aria-label="카메라로 신청서 촬영"
+                        className="aspect-[4/3] w-full bg-slate-100 rounded-2xl relative flex flex-col items-center justify-center gap-3 overflow-hidden active:bg-slate-200 transition-colors"
+                      >
                         <motion.div
                           animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 2 }}
                           className="w-16 h-16 border-2 border-indigo-400 rounded-2xl flex items-center justify-center"
@@ -1331,7 +1343,7 @@ export default function Home() {
                         <div className="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-indigo-400 rounded-tr-lg" />
                         <div className="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-indigo-400 rounded-bl-lg" />
                         <div className="absolute bottom-4 right-4 w-6 h-6 border-b-2 border-r-2 border-indigo-400 rounded-br-lg" />
-                      </div>
+                      </button>
                     )}
 
                     <button
