@@ -8,7 +8,7 @@ import { ArrowLeft, Phone, MoreVertical, Camera, X, ImageIcon, Upload, PartyPopp
 import {
   listApplications, completeApplication, scheduleNavigation, schedulesToday, schedulesUpcoming, assetUrl, createWorkSession, predictFatigueAfterWork,
   getNavigationProgress, updateNavigationProgress,
-  type BodyDiscomfortPart, type FatiguePrediction, type NavFloor, type NavigationResponse,
+  type BodyDiscomfortPart, type FatiguePrediction, type NavFloor, type NavigationResponse, type Schedule,
 } from "@/lib/api";
 import { getStoredAuthUser, type AuthUser } from "@/lib/auth";
 import { useWebWorkTracker, type WorkTrackingSnapshot } from "@/lib/work-tracker";
@@ -31,6 +31,7 @@ interface DispatchStop {
   kind: "warehouse" | "building";
   cards: DispatchCard[];
   scheduleId?: number;
+  scheduleIds?: number[];
   items?: DispatchItem[];
 }
 interface DispatchPlan {
@@ -40,7 +41,13 @@ interface DispatchPlan {
   workerName?: string;
   stops: DispatchStop[];
 }
-interface DispatchBuilding { 건물명: string; scheduleId: number; items: DispatchItem[]; }
+interface DispatchBuilding { 건물명: string; scheduleId: number; scheduleIds: number[]; items: DispatchItem[]; }
+
+function scheduleBuildingName(row: Schedule): string {
+  if (row.동선?.건물명) return row.동선.건물명;
+  if (row.건물명) return row.건물명;
+  return row.설치장소?.split(/[\s\d]/)[0] || row.신청부서 || "미지정";
+}
 
 const CSS_ANIM = `@keyframes dispatchDraw { to { stroke-dashoffset: 0; } }`;
 
@@ -1176,8 +1183,11 @@ export default function DispatchPage() {
   const [loggedInUser, setLoggedInUser] = useState<AuthUser | null>(null);
   const [finishing, setFinishing] = useState(false);
   const [navigationSyncState, setNavigationSyncState] = useState<NavigationSyncState>("connecting");
+  const [navigationSyncHydrated, setNavigationSyncHydrated] = useState(false);
   const lastPublishedNavigationRef = useRef<string | null>(null);
   const lastAppliedNavigationRevisionRef = useRef(-1);
+  const lastAppliedRemoteNavigationRef = useRef<string | null>(null);
+  const pendingNavigationPublishRef = useRef<string | null>(null);
   const remoteCompletionHandledRef = useRef(false);
   const returnHomeAfterFinishRef = useRef(false);
   const finishRef = useRef<(returnHome?: boolean) => Promise<void>>(async () => undefined);
@@ -1211,7 +1221,12 @@ export default function DispatchPage() {
         try { p = JSON.parse(saved); } catch { throw new Error("저장된 출동 정보를 읽지 못했습니다."); }
         const list: DispatchBuilding[] = (p.stops ?? [])
           .filter((s) => s.kind === "building" && s.scheduleId != null)
-          .map((s) => ({ 건물명: s.건물명, scheduleId: s.scheduleId!, items: s.items ?? [] }));
+          .map((s) => ({
+            건물명: s.건물명,
+            scheduleId: s.scheduleId!,
+            scheduleIds: s.scheduleIds?.length ? s.scheduleIds : [s.scheduleId!],
+            items: s.items ?? [],
+          }));
         if (list.length === 0) throw new Error("출동할 건물이 없습니다.");
 
         // 최적화를 다시 실행하면 서버가 기존 schedule 행을 삭제하고 새 ID를 만든다.
@@ -1230,6 +1245,18 @@ export default function DispatchPage() {
           sessionStorage.removeItem("gwanzae-dispatch-started-at");
           sessionStorage.removeItem("gwanzae-dispatch-session-id");
           throw new Error("이전 출동 계획이 만료되었습니다. 오늘 화면에서 최신 일정을 다시 선택해주세요.");
+        }
+        // 구버전 캐시에는 건물별 대표 일정 ID 하나만 들어 있다. 현재 서버 일정으로
+        // 모든 ID를 복원해, 업데이트 직후에도 출동을 다시 시작하지 않고 동기화한다.
+        for (const building of list) {
+          const matchingIds = currentSchedules
+            .filter((schedule) => scheduleBuildingName(schedule) === building.건물명)
+            .map((schedule) => schedule.id)
+            .sort((a, b) => a - b);
+          if (matchingIds.length > 0) {
+            building.scheduleIds = matchingIds;
+            building.scheduleId = matchingIds[0];
+          }
         }
         setPlan(p);
         setBuildings(list);
@@ -1268,17 +1295,27 @@ export default function DispatchPage() {
     return ranges;
   }, [steps]);
 
-  // 관리자 화면의 현재 건물/스텝을 서버에 기록한다. 전송 실패 시 같은 상태를
-  // 성공할 때까지 재시도해, 현장 네트워크가 잠깐 끊겨도 작업자 화면이 다시 따라온다.
+  // 어느 기기에서든 사용자가 바꾼 현재 건물/스텝을 서버에 기록한다. 서버에서
+  // 받아 적용한 상태는 다시 전송하지 않아 기기 사이의 무한 반사를 막는다.
   useEffect(() => {
     const activeScheduleId = buildings?.[buildingIdx]?.scheduleId;
-    if (!isAdminViewer || !plan || !activeScheduleId || loading) return;
+    if (!navigationSyncHydrated || !plan || !activeScheduleId || loading) return;
     const signature = `${plan.출동일시}|${phase}|${activeScheduleId}|${stepIdx}`;
+    if (lastAppliedRemoteNavigationRef.current === signature) {
+      lastAppliedRemoteNavigationRef.current = null;
+      lastPublishedNavigationRef.current = signature;
+      return;
+    }
     if (lastPublishedNavigationRef.current === signature) return;
 
     let cancelled = false;
     let timer: number | null = null;
+    pendingNavigationPublishRef.current = signature;
     setNavigationSyncState("connecting");
+    const activeRange = buildingRanges[buildingIdx];
+    const sharedStepIndex = phase === "nav" && activeRange
+      ? Math.max(0, stepIdx - activeRange.start)
+      : 0;
 
     const publish = async () => {
       try {
@@ -1286,10 +1323,13 @@ export default function DispatchPage() {
           dispatch_time: plan.출동일시,
           phase,
           active_schedule_id: activeScheduleId,
-          step_index: stepIdx,
+          // 서버에는 전체 출동 배열 인덱스가 아니라 현재 건물 안의 스텝을 저장한다.
+          // 기기마다 건물 정렬이 달라도 같은 안내 화면을 찾을 수 있다.
+          step_index: sharedStepIndex,
         });
         if (!cancelled) {
           lastPublishedNavigationRef.current = signature;
+          if (pendingNavigationPublishRef.current === signature) pendingNavigationPublishRef.current = null;
           setNavigationSyncState("connected");
         }
       } catch (syncError) {
@@ -1305,19 +1345,24 @@ export default function DispatchPage() {
     return () => {
       cancelled = true;
       if (timer != null) window.clearTimeout(timer);
+      if (pendingNavigationPublishRef.current === signature) pendingNavigationPublishRef.current = null;
     };
-  }, [buildings, buildingIdx, isAdminViewer, loading, phase, plan, stepIdx]);
+  }, [buildingRanges, buildings, buildingIdx, loading, navigationSyncHydrated, phase, plan, stepIdx]);
 
-  // 작업자 화면은 관리자 진행 상태를 읽어 같은 건물과 안내 스텝을 표시한다.
+  // 모든 연결 기기는 서버 진행 상태를 읽어 같은 건물과 안내 스텝을 표시한다.
   useEffect(() => {
-    if (loggedInUser?.role !== "worker" || !plan || !buildings || steps.length === 0) return;
+    if (!loggedInUser || !plan || !buildings || steps.length === 0) return;
     let active = true;
     let timer: number | null = null;
     const applyAdminProgress = async () => {
       try {
         const progress = await getNavigationProgress(plan.출동일시);
         if (!active) return;
+        setNavigationSyncHydrated(true);
         setNavigationSyncState("connected");
+        // 이 기기에서 보낸 상태가 아직 서버에 저장되는 중이면 과거 응답으로
+        // 화면을 되돌리지 않는다. 저장 완료 뒤 다음 조회에서 최신 revision을 받는다.
+        if (pendingNavigationPublishRef.current) return;
         if (progress.revision <= lastAppliedNavigationRevisionRef.current) return;
         if (progress.phase === "completed") {
           lastAppliedNavigationRevisionRef.current = progress.revision;
@@ -1328,23 +1373,34 @@ export default function DispatchPage() {
           }
           return;
         }
-        const nextBuildingIdx = buildings.findIndex((building) => building.scheduleId === progress.active_schedule_id);
-        if (nextBuildingIdx < 0) return;
+        const nextBuildingIdx = buildings.findIndex((building) => (
+          building.scheduleIds.includes(progress.active_schedule_id ?? -1)
+        ));
+        if (nextBuildingIdx < 0) {
+          setNavigationSyncState("retrying");
+          console.warn("[dispatch] 다른 기기의 일정 ID를 현재 출동 계획에서 찾지 못했습니다.", progress.active_schedule_id);
+          return;
+        }
         lastAppliedNavigationRevisionRef.current = progress.revision;
+        const range = buildingRanges[nextBuildingIdx];
+        const nextStep = range
+          ? Math.min(range.end, Math.max(range.start, range.start + progress.step_index))
+          : progress.step_index;
+        lastAppliedRemoteNavigationRef.current = `${plan.출동일시}|${progress.phase}|${progress.active_schedule_id}|${nextStep}`;
         setBuildingIdx(nextBuildingIdx);
         setPhotoOpen(false);
         setPhase(progress.phase);
+        setStepIdx(nextStep);
         if (progress.phase === "nav") {
-          const range = buildingRanges[nextBuildingIdx];
-          const nextStep = range
-            ? Math.min(range.end, Math.max(range.start, progress.step_index))
-            : progress.step_index;
-          setStepIdx(nextStep);
           setAnimKey((key) => key + 1);
         }
       } catch (syncError) {
         console.warn("[dispatch] 관리자 네비게이션 상태 확인 실패", syncError);
-        if (active) setNavigationSyncState("retrying");
+        if (active) {
+          // 아직 공유 상태가 없는 첫 출동(404)은 이 기기의 현재 화면으로 생성한다.
+          if (String(syncError).includes("HTTP 404")) setNavigationSyncHydrated(true);
+          else setNavigationSyncState("retrying");
+        }
       } finally {
         // 느린 네트워크에서도 요청이 중첩되지 않도록 이전 응답 뒤에 다음 조회를 예약한다.
         if (active) timer = window.setTimeout(() => { void applyAdminProgress(); }, 1_000);
@@ -1355,7 +1411,7 @@ export default function DispatchPage() {
       active = false;
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [buildingRanges, buildings, loggedInUser?.role, plan, steps.length]);
+  }, [buildingRanges, buildings, loggedInUser, plan, steps.length]);
 
   if (loading) {
     return (
@@ -1414,7 +1470,7 @@ export default function DispatchPage() {
       <>
         <OverviewScreen plan={plan} currentIdx={currentStopIdx}
           onBack={() => router.push(homePath)} onStart={startNav} onSkip={startNav}
-          following={!isAdminViewer} />
+          following={false} />
         <NavigationSyncStatus state={navigationSyncState} />
         {!isAdminViewer && <TrackingStatus tracking={tracking} />}
       </>
@@ -1461,7 +1517,9 @@ export default function DispatchPage() {
   function completeBuilding() {
     setPhotoOpen(false);
     if (isLastBuilding) { finish(); return; }
-    setBuildingIdx(curB + 1);
+    const nextBuildingIdx = curB + 1;
+    setBuildingIdx(nextBuildingIdx);
+    setStepIdx(buildingRanges[nextBuildingIdx]?.start ?? stepIdx);
     setPhase("overview");
   }
 
@@ -1470,7 +1528,7 @@ export default function DispatchPage() {
     remoteCompletionHandledRef.current = true;
     returnHomeAfterFinishRef.current = returnHome;
     setFinishing(true);
-    if (isAdminViewer) {
+    if (!returnHome) {
       const activeScheduleId = buildings?.[buildingIdx]?.scheduleId;
       if (!plan || !activeScheduleId) {
         window.alert("완료 상태를 공유할 출동 정보를 찾지 못했습니다. 오늘 화면에서 다시 출동을 열어주세요.");
@@ -1482,7 +1540,7 @@ export default function DispatchPage() {
           dispatch_time: plan.출동일시,
           phase: "completed",
           active_schedule_id: activeScheduleId,
-          step_index: Math.min(stepIdx, Math.max(steps.length - 1, 0)),
+          step_index: Math.max(0, stepIdx - (buildingRanges[buildingIdx]?.start ?? 0)),
         });
       } catch (syncError) {
         console.warn("[dispatch] 관리자 완료 상태 공유 실패", syncError);
@@ -1490,6 +1548,8 @@ export default function DispatchPage() {
         setFinishing(false);
         return;
       }
+    }
+    if (isAdminViewer) {
       stopTracking();
       sessionStorage.removeItem("gwanzae-dispatch-plan");
       sessionStorage.removeItem("gwanzae-dispatch-apps");
@@ -1664,10 +1724,6 @@ export default function DispatchPage() {
   }
   function afterPhoto() {
     setPhotoOpen(false);
-    if (!isAdminViewer) {
-      if (isLast) finish();
-      return;
-    }
     if (isLastOfBuilding) completeBuilding(); else go(1);
   }
 
@@ -1711,8 +1767,7 @@ export default function DispatchPage() {
         primaryIcon={isPickup ? <Camera size={20} /> : undefined}
         onPrev={() => go(-1)}
         onPrimary={handlePrimary}
-        following={!isAdminViewer}
-        followerAction={isPickup}
+        following={false}
       />
 
       {photoOpen && isPickup && (

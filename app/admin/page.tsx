@@ -446,6 +446,7 @@ export default function Home() {
         (byBuilding.get(building) ?? byBuilding.set(building, []).get(building)!).push(row);
       }
       const buildingStops = [...byBuilding.entries()].map(([building, rows]) => {
+        const scheduleIds = rows.map((row) => row.id).sort((a, b) => a - b);
         const byApplication = new Map<string, Schedule[]>();
         for (const row of rows) {
           const key = row.신청번호 ?? building;
@@ -454,7 +455,8 @@ export default function Home() {
         return {
           건물명: building,
           kind: "building" as const,
-          scheduleId: rows[0]?.id,
+          scheduleId: scheduleIds[0],
+          scheduleIds,
           cards: [...byApplication.entries()].map(([applicationNumber, applicationRows]) => ({
             신청번호: applicationNumber,
             신청일자: "",

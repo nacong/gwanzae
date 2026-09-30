@@ -30,6 +30,8 @@ interface Stop {
   kind?: "warehouse" | "building";
   /** dispatch 화면이 navigation(/schedules/{id}/navigation)을 조회할 대표 일정 id */
   scheduleId?: number;
+  /** 같은 건물에 묶인 모든 일정 id — 기기마다 응답 순서가 달라도 진행 상태를 매칭한다. */
+  scheduleIds?: number[];
   items?: DispatchItem[];
 }
 
@@ -101,7 +103,8 @@ function groupSchedules(rows: Schedule[], infoByApp: Map<string, AppInfo>): Slot
         수량: r.수량 ?? 1,
         설치장소: r.설치장소 ?? "",
       }));
-      stops.push({ 건물명, cards, kind: "building", scheduleId: bRows[0]?.id, items });
+      const scheduleIds = bRows.map((row) => row.id).sort((a, b) => a - b);
+      stops.push({ 건물명, cards, kind: "building", scheduleId: scheduleIds[0], scheduleIds, items });
     }
     const routeStops = [warehouseStop(`${WAREHOUSE_NAME} 출발`), ...stops, warehouseStop(`${WAREHOUSE_NAME} 도착`)];
     const appNumbers = [...new Set(slotRows.map((r) => r.신청번호).filter((n): n is string => !!n))];
@@ -239,6 +242,7 @@ export default function TodayPage() {
           kind: s.kind ?? "building",
           cards: s.cards,
           scheduleId: s.scheduleId,
+          scheduleIds: s.scheduleIds,
           items: s.items ?? [],
         })),
       };
