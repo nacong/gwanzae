@@ -49,6 +49,13 @@ function scheduleBuildingName(row: Schedule): string {
   return row.설치장소?.split(/[\s\d]/)[0] || row.신청부서 || "미지정";
 }
 
+function isSameDispatchTime(left: string, right: string): boolean {
+  const leftMs = new Date(left).getTime();
+  const rightMs = new Date(right).getTime();
+  if (Number.isFinite(leftMs) && Number.isFinite(rightMs)) return leftMs === rightMs;
+  return left === right;
+}
+
 const CSS_ANIM = `@keyframes dispatchDraw { to { stroke-dashoffset: 0; } }`;
 
 /* ─── navigation 응답 정규화 (한글·영문 키 변형 흡수) ─────────── */
@@ -1250,7 +1257,10 @@ export default function DispatchPage() {
         // 모든 ID를 복원해, 업데이트 직후에도 출동을 다시 시작하지 않고 동기화한다.
         for (const building of list) {
           const matchingIds = currentSchedules
-            .filter((schedule) => scheduleBuildingName(schedule) === building.건물명)
+            .filter((schedule) => (
+              isSameDispatchTime(schedule.출동일시, p.출동일시)
+              && scheduleBuildingName(schedule) === building.건물명
+            ))
             .map((schedule) => schedule.id)
             .sort((a, b) => a - b);
           if (matchingIds.length > 0) {
